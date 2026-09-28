@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <!-- Estudio de Fotografía en Culiacán — CADSTUDIO -->
+  <url>
+    <loc>https://cadstudio.mx/</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <!-- Portafolio de Obras y Fotografías de Autor -->
+  <url>
+    <loc>https://cadstudio.mx/#portfolio</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <!-- Nuestras 4 Categorías Fuertes en Culiacán -->
+  <url>
+    <loc>https://cadstudio.mx/#core-categories</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <!-- Servicios del Estudio de Fotografía -->
+  <url>
+    <loc>https://cadstudio.mx/#services</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <!-- Contacto & Reservas de Fechas en Culiacán -->
+  <url>
+    <loc>https://cadstudio.mx/#contact</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <!-- Suite Privada de Clientes con PIN -->
+  <url>
+    <loc>https://cadstudio.mx/?view=clients</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <!-- Categoría de Servicio: Fotografía de Bodas en Culiacán & Sinaloa -->
+  <url>
+    <loc>https://cadstudio.mx/?categoria=bodas</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+  </url>
+  <!-- Categoría de Servicio: Fotografía Gastronómica de Autor & Restaurantes en Culiacán -->
+  <url>
+    <loc>https://cadstudio.mx/?categoria=gastronomia</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.90</priority>
+  </url>
+  <!-- Categoría de Servicio: Fotografía de Arquitectura, Interiorismo & Espacios en Culiacán -->
+  <url>
+    <loc>https://cadstudio.mx/?categoria=arquitectura</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.90</priority>
+  </url>
+  <!-- Categoría de Servicio: Retrato Editorial de Autor & Perfiles Profesionales en Culiacán -->
+  <url>
+    <loc>https://cadstudio.mx/?categoria=retrato</loc>
+    <lastmod>2026-09-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.90</priority>
+  </url>
+</urlset>

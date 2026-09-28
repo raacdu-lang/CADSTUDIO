@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Syne', sans-serif;
+    --font-serif: 'Cormorant Garamond', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    /* Studio Brand Palette */
+    --color-studio-dark: #0E2931;
+    --color-studio-teal: #2B7574;
+    --color-studio-teal-light: #3b9493;
+    --color-studio-platinum: #E2E2E0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #E2E2E0;
+    color: #0E2931;
+    selection-background-color: #2B7574;
+    selection-color: #E2E2E0;
+  }
+
+  ::selection {
+    background-color: #2B7574;
+    color: #E2E2E0;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-editorial {
+  font-family: var(--font-serif);
+}
+
+.font-mono-data {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Studio Theme Helpers */
+.bg-studio-dark {
+  background-color: #0E2931;
+}
+
+.bg-studio-darker {
+  background-color: #070e11;
+}
+
+.bg-studio-light {
+  background-color: #E2E2E0;
+}
+
+.border-studio-dark {
+  border-color: #0E2931;
+}
+
+.bg-studio-teal {
+  background-color: #2B7574;
+}
+
+.bg-studio-teal-hover:hover {
+  background-color: #3b9493;
+}
+
+.text-studio-teal {
+  color: #2B7574;
+}
+
+.border-studio-teal {
+  border-color: #2B7574;
+}
+
+.text-studio-platinum {
+  color: #E2E2E0;
+}
+
+.glow-teal {
+  box-shadow: 0 0 25px -5px rgba(43, 117, 116, 0.4);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #E2E2E0;
+}
+::-webkit-scrollbar-thumb {
+  background: #2B7574;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #0E2931;
+}

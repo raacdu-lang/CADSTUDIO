@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "ClientConversation": {
+      "title": "ClientConversation",
+      "description": "Historial de pláticas y consultas entre clientes y el asistente bot de CADSTUDIO",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "lastUpdatedAt": { "type": "string" },
+        "messages": {
+          "type": "array",
+          "description": "Lista de mensajes intercambiados"
+        },
+        "leadStatus": { "type": "string" }
+      },
+      "required": ["sessionId", "startedAt", "lastUpdatedAt", "messages"]
+    },
+    "BotKnowledge": {
+      "title": "BotKnowledge",
+      "description": "Información del negocio enseñada al bot mediante archivos o entrenamiento directo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "content": { "type": "string" },
+        "sourceType": { "type": "string" },
+        "fileName": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "content", "sourceType", "updatedAt"]
+    },
+    "ClientGallery": {
+      "title": "ClientGallery",
+      "description": "Galerías privadas de clientes con archivos y acceso protegido por código/PIN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "token": { "type": "string" },
+        "pin": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "status": { "type": "string" },
+        "files": { "type": "array" },
+        "selectedFileIds": { "type": "array" },
+        "clientNotes": { "type": "string" },
+        "deliveryDate": { "type": "string" },
+        "totalDownloads": { "type": "number" }
+      },
+      "required": ["id", "token", "clientName", "title", "files"]
+    },
+    "StudioAnnouncement": {
+      "title": "StudioAnnouncement",
+      "description": "Ofertas especiales, avisos y promociones configurables por el administrador",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "badge": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "ctaText": { "type": "string" },
+        "ctaAction": { "type": "string" },
+        "theme": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "message", "isActive"]
+    }
+  },
+  "firestore": {
+    "/client_conversations/{conversationId}": {
+      "schema": "ClientConversation",
+      "description": "Colección de historial de pláticas con clientes"
+    },
+    "/bot_knowledge/{knowledgeId}": {
+      "schema": "BotKnowledge",
+      "description": "Conocimiento del negocio para entrenar al bot"
+    },
+    "/client_galleries/{galleryId}": {
+      "schema": "ClientGallery",
+      "description": "Galerías privadas de clientes accesibles únicamente con su código/token"
+    },
+    "/studio_announcements/{announcementId}": {
+      "schema": "StudioAnnouncement",
+      "description": "Avisos y ofertas especiales publicadas en la web"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "CADSTUDIO — Fotografía, Cine & Client Suite",
+  "description": "Estudio fotográfico y cinematográfico de autor con entrega privada de archivos en alta resolución, galerías con zoom dinámico, selección para clientes y panel de control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
