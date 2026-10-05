@@ -46,6 +46,9 @@ export const INITIAL_STUDIO_CONFIG: StudioConfig = {
   whatsapp: "+526671234567",
   instagram: "@cadstudio.foto",
   vimeo: "vimeo.com/cadstudio",
+  heroImage: "/src/assets/images/hero_photographer_cinematic_1790312865168.jpg",
+  cinemaFeatureImage: "/src/assets/images/hero_photographer_cinematic_1790312865168.jpg",
+  cinemaReelImage: "/src/assets/images/fashion_reel_vertical_1790312908204.jpg",
 };
 
 export const INITIAL_PORTFOLIO_ITEMS: PortfolioItem[] = [

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PortfolioItem, AspectRatio, StudioCategory } from '../types';
 import { Play, Maximize2, Camera, Film, Lock, ArrowRight } from 'lucide-react';
+import { trackCategoryClick } from '../services/storageService';
 
 interface PortfolioGalleryProps {
   items: PortfolioItem[];
@@ -137,6 +138,10 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
   const activeCategory = externalSelectedCategory !== undefined ? externalSelectedCategory : internalCategory;
 
   const handleCategoryChange = (catId: string) => {
+    if (catId && catId !== 'all') {
+      const catObj = categories.find((c) => c.id === catId);
+      trackCategoryClick(catId, catObj?.label);
+    }
     if (externalOnSelectCategory) {
       externalOnSelectCategory(catId);
     } else {
@@ -150,9 +155,14 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
     ...categories.map((c) => ({ id: c.id, label: c.label })),
   ];
 
+  // Only display items curated for the main home page that are active/featured
+  const homeCuratedItems = items.filter(
+    (item) => item.isFeatured !== false && item.showOnHome !== false
+  );
+
   const filteredItems = activeCategory === 'all'
-    ? items
-    : items.filter((item) => item.category === activeCategory);
+    ? homeCuratedItems
+    : homeCuratedItems.filter((item) => item.category === activeCategory);
 
   // Helper for aspect ratio class
   const getAspectRatioClass = (ratio: AspectRatio) => {
@@ -179,9 +189,9 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
           <div>
             <div className="flex items-center gap-2 text-xs font-mono-data text-[#0E2931]/70 mb-2">
-              <span className="text-[#2B7574] font-bold uppercase">OBRAS SELECCIONADAS</span>
+              <span className="text-[#2B7574] font-bold uppercase">OBRAS SELECCIONADAS EN PORTADA</span>
               <span aria-hidden="true">·</span>
-              <span>RESOLUCIÓN MASTER</span>
+              <span>{homeCuratedItems.length} DE {items.length} OBRAS</span>
               <span aria-hidden="true">·</span>
               <span>CADSTUDIO CULIACÁN</span>
             </div>

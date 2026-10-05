@@ -33,10 +33,13 @@ export interface PortfolioItem {
   videoSrc?: string;
   client?: string;
   year: string;
+  order?: number;
   exif?: ExifData;
   colors?: string[];
   description?: string;
   featured?: boolean;
+  isFeatured?: boolean;
+  showOnHome?: boolean;
 }
 
 export interface ClientFile {
@@ -149,6 +152,9 @@ export interface StudioConfig {
   experienceYears?: number;
   projectsCompleted?: number;
   awardsCount?: number;
+  heroImage?: string;
+  cinemaFeatureImage?: string;
+  cinemaReelImage?: string;
 }
 
 export interface ContactInquiry {
@@ -207,12 +213,53 @@ export interface DiscoverySessionBooking {
   endTime: string;
   timeZone: string;
   format: 'google_meet' | 'in_person' | 'phone';
+  meetingType?: 'discovery' | 'shoot_production';
+  productionType?: 'photos' | 'video' | 'both';
+  location?: string;
   notes?: string;
   googleEventId?: string;
   meetLink?: string;
   htmlLink?: string;
   status: 'confirmed' | 'pending' | 'cancelled';
   createdAt: string;
+  emailNotificationStatus?: {
+    sent: boolean;
+    clientDelivered: boolean;
+    studioDelivered: boolean;
+    sentAt: string;
+    recipientClient: string;
+    recipientStudio: string;
+  };
+}
+
+export interface EmailNotificationLog {
+  id: string;
+  bookingId?: string;
+  recipientType: 'studio' | 'client' | 'both';
+  recipientClient?: string;
+  recipientStudio?: string;
+  clientSubject: string;
+  studioSubject: string;
+  status: 'delivered' | 'sent' | 'simulated' | 'failed';
+  sentAt: string;
+  clientHtml?: string;
+  studioHtml?: string;
+  bookingSummary: {
+    clientName: string;
+    clientEmail: string;
+    clientPhone?: string;
+    shootType: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    format: string;
+    meetingType?: string;
+    productionType?: string;
+    location?: string;
+    meetLink?: string;
+    notes?: string;
+  };
+  deliveryMethod: 'smtp' | 'google_calendar_invitation' | 'built_in_delivery';
 }
 
 export interface CalendarTimeSlot {
@@ -236,4 +283,23 @@ export interface StudioAnnouncement {
   discountCode?: string;
   details?: string;
   imageUrl?: string;
+}
+
+export interface CategoryClickStat {
+  categoryId: string;
+  categoryName: string;
+  clicks: number;
+  views: number;
+  percentage?: number;
+  lastClickedAt?: string;
+}
+
+export interface StudioStats {
+  totalVisits: number;
+  clientViews: number;
+  totalDownloads: number;
+  activeGalleries: number;
+  monthlyDownloads: { month: string; count: number }[];
+  categoryEngagement: { category: string; views: number; clicks?: number }[];
+  categoryClicks?: CategoryClickStat[];
 }

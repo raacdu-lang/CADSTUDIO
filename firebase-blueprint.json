@@ -1,5 +1,140 @@
 {
   "entities": {
+    "PortfolioItem": {
+      "title": "PortfolioItem",
+      "description": "Obras fotográficas y cinematográficas exhibidas en el portafolio público de CADSTUDIO",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "aspectRatio": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "url": { "type": "string" },
+        "originalUrl": { "type": "string" },
+        "videoSrc": { "type": "string" },
+        "client": { "type": "string" },
+        "year": { "type": "string" },
+        "camera": { "type": "string" },
+        "description": { "type": "string" },
+        "featured": { "type": "boolean" },
+        "isFeatured": { "type": "boolean" },
+        "showOnHome": { "type": "boolean" },
+        "order": { "type": "number" }
+      },
+      "required": ["id", "title", "url", "category"]
+    },
+    "StudioConfig": {
+      "title": "StudioConfig",
+      "description": "Configuración global, identidad, fotos maestras y datos de contacto de CADSTUDIO",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "tagline": { "type": "string" },
+        "heroTitle": { "type": "string" },
+        "heroSubtitle": { "type": "string" },
+        "heroImage": { "type": "string" },
+        "cinemaFeatureImage": { "type": "string" },
+        "cinemaReelImage": { "type": "string" },
+        "location": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "instagram": { "type": "string" }
+      },
+      "required": ["id", "title", "heroImage"]
+    },
+    "StudioCategory": {
+      "title": "StudioCategory",
+      "description": "Categorías de especialidad fotográfica con imágenes de portada y metadatos",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "image": { "type": "string" },
+        "count": { "type": "string" },
+        "isCore": { "type": "boolean" }
+      },
+      "required": ["id", "label", "image"]
+    },
+    "ClientGallery": {
+      "title": "ClientGallery",
+      "description": "Galerías privadas de clientes con archivos y acceso protegido por código/PIN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "token": { "type": "string" },
+        "pin": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "status": { "type": "string" },
+        "files": { "type": "array" },
+        "selectedFileIds": { "type": "array" },
+        "clientNotes": { "type": "string" },
+        "deliveryDate": { "type": "string" },
+        "totalDownloads": { "type": "number" },
+        "driveFolderId": { "type": "string" },
+        "driveFolderName": { "type": "string" },
+        "lastDriveSync": { "type": "string" },
+        "autoSyncDrive": { "type": "boolean" },
+        "coverImage": { "type": "string" }
+      },
+      "required": ["id", "token", "clientName", "title", "files"]
+    },
+    "ActivityNotification": {
+      "title": "ActivityNotification",
+      "description": "Registro de eventos en tiempo real: descargas, selecciones de clientes, visitas y cambios de admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "clientName": { "type": "string" }
+      },
+      "required": ["id", "type", "title", "description", "timestamp"]
+    },
+    "DiscoverySessionBooking": {
+      "title": "DiscoverySessionBooking",
+      "description": "Citas y sesiones de descubrimiento agendadas por clientes potenciales",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "shootType": { "type": "string" },
+        "date": { "type": "string" },
+        "startTime": { "type": "string" },
+        "format": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "clientName", "date", "startTime"]
+    },
+    "StudioAnnouncement": {
+      "title": "StudioAnnouncement",
+      "description": "Ofertas especiales, avisos y promociones configurables por el administrador",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "badge": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "ctaText": { "type": "string" },
+        "ctaAction": { "type": "string" },
+        "theme": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "message", "isActive"]
+    },
     "ClientConversation": {
       "title": "ClientConversation",
       "description": "Historial de pláticas y consultas entre clientes y el asistente bot de CADSTUDIO",
@@ -33,62 +168,44 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["title", "content", "sourceType", "updatedAt"]
-    },
-    "ClientGallery": {
-      "title": "ClientGallery",
-      "description": "Galerías privadas de clientes con archivos y acceso protegido por código/PIN",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "token": { "type": "string" },
-        "pin": { "type": "string" },
-        "clientName": { "type": "string" },
-        "clientEmail": { "type": "string" },
-        "title": { "type": "string" },
-        "subtitle": { "type": "string" },
-        "status": { "type": "string" },
-        "files": { "type": "array" },
-        "selectedFileIds": { "type": "array" },
-        "clientNotes": { "type": "string" },
-        "deliveryDate": { "type": "string" },
-        "totalDownloads": { "type": "number" }
-      },
-      "required": ["id", "token", "clientName", "title", "files"]
-    },
-    "StudioAnnouncement": {
-      "title": "StudioAnnouncement",
-      "description": "Ofertas especiales, avisos y promociones configurables por el administrador",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "isActive": { "type": "boolean" },
-        "badge": { "type": "string" },
-        "title": { "type": "string" },
-        "message": { "type": "string" },
-        "ctaText": { "type": "string" },
-        "ctaAction": { "type": "string" },
-        "theme": { "type": "string" },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["title", "message", "isActive"]
     }
   },
   "firestore": {
-    "/client_conversations/{conversationId}": {
-      "schema": "ClientConversation",
-      "description": "Colección de historial de pláticas con clientes"
+    "/portfolio_items/{itemId}": {
+      "schema": "PortfolioItem",
+      "description": "Colección de obras del portafolio web con su orden y visibilidad"
     },
-    "/bot_knowledge/{knowledgeId}": {
-      "schema": "BotKnowledge",
-      "description": "Conocimiento del negocio para entrenar al bot"
+    "/studio_config/{configId}": {
+      "schema": "StudioConfig",
+      "description": "Configuración maestra de la web: foto Hero, cinema, redes y contacto"
+    },
+    "/studio_categories/{categoryId}": {
+      "schema": "StudioCategory",
+      "description": "Categorías fotográficas del estudio y fotos de portada"
     },
     "/client_galleries/{galleryId}": {
       "schema": "ClientGallery",
       "description": "Galerías privadas de clientes accesibles únicamente con su código/token"
     },
+    "/activity_notifications/{notificationId}": {
+      "schema": "ActivityNotification",
+      "description": "Registro de eventos en vivo: descargas, visitas, cambios y selecciones"
+    },
+    "/discovery_sessions/{sessionId}": {
+      "schema": "DiscoverySessionBooking",
+      "description": "Citas de asesoría agendadas por clientes"
+    },
     "/studio_announcements/{announcementId}": {
       "schema": "StudioAnnouncement",
       "description": "Avisos y ofertas especiales publicadas en la web"
+    },
+    "/client_conversations/{conversationId}": {
+      "schema": "ClientConversation",
+      "description": "Historial de pláticas con clientes"
+    },
+    "/bot_knowledge/{knowledgeId}": {
+      "schema": "BotKnowledge",
+      "description": "Conocimiento del negocio para entrenar al bot"
     }
   }
 }

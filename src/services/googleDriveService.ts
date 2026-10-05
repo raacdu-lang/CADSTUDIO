@@ -12,11 +12,15 @@ import {
   GoogleDriveFile,
   GoogleDriveFolder,
   AspectRatio,
+  PortfolioItem,
 } from '../types';
 import {
   getClientGalleries,
   saveClientGalleries,
   addActivityLog,
+  getPortfolioItems,
+  savePortfolioItems,
+  updateAnyWebsitePhoto,
 } from './storageService';
 
 // Scopes required for Google Drive integration
@@ -83,6 +87,12 @@ export const signInWithGoogleDrive = async (): Promise<{
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Error al conectar Google Drive:', error);
+    if (error?.code === 'auth/popup-closed-by-user') {
+      throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
+    }
+    if (error?.code === 'auth/popup-blocked') {
+      throw new Error('El navegador bloqueó la ventana emergente de Google. Por favor, habilite las ventanas emergentes.');
+    }
     throw error;
   } finally {
     isSigningIn = false;
@@ -446,4 +456,149 @@ export const autoSyncAllGalleries = async (): Promise<{
     totalAssetsSynced,
     results,
   };
+};
+
+/**
+ * Sincroniza e importa una carpeta entera de Google Drive hacia el Portafolio Web (obras generales).
+ * Permite definir categoría y si se muestran en la Página Principal (showOnHome) o solo en el portafolio completo.
+ */
+export const syncDriveFolderToPortfolio = async (
+  folderId: string,
+  options?: {
+    category?: 'bodas' | 'gastronomia' | 'arquitectura' | 'retrato';
+    showOnHome?: boolean;
+    client?: string;
+  }
+): Promise<{
+  folderName: string;
+  totalSynced: number;
+  newCount: number;
+  items: PortfolioItem[];
+}> => {
+  const token = getDriveAccessToken();
+  if (!token) {
+    throw new Error('Google Drive no está conectado. Inicie sesión para sincronizar el portafolio.');
+  }
+
+  const folderDetails = await getDriveFolderDetails(folderId);
+  const driveFiles = await listDriveFilesInFolder(folderId);
+
+  if (driveFiles.length === 0) {
+    throw new Error(
+      `La carpeta "${folderDetails.name}" no contiene fotografías ni videos (formatos JPG, PNG o MP4).`
+    );
+  }
+
+  const currentItems = getPortfolioItems();
+  const existingIds = new Set(currentItems.map((it) => it.id));
+  const newItems: PortfolioItem[] = [];
+  let newCount = 0;
+
+  for (let i = 0; i < driveFiles.length; i++) {
+    const df = driveFiles[i];
+    const isVideo = df.mimeType.includes('video');
+    const width = df.imageMediaMetadata?.width || df.videoMediaMetadata?.width || 3840;
+    const height = df.imageMediaMetadata?.height || df.videoMediaMetadata?.height || 2560;
+    const cleanTitle = df.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
+
+    const previewUrl = df.thumbnailLink
+      ? df.thumbnailLink.replace(/=s\d+$/, '=s1600')
+      : `https://drive.google.com/thumbnail?id=${df.id}&sz=w1600`;
+
+    const originalUrl =
+      df.webContentLink || `https://drive.google.com/uc?id=${df.id}&export=download`;
+
+    const meta = df.imageMediaMetadata;
+    const camera = meta?.cameraModel
+      ? `${meta.cameraMake || ''} ${meta.cameraModel}`.trim()
+      : 'Hasselblad H6D-100c';
+
+    const itemId = `port_gdrive_${df.id}`;
+    if (!existingIds.has(itemId)) {
+      newCount++;
+    }
+
+    newItems.push({
+      id: itemId,
+      title: cleanTitle,
+      category: options?.category || 'bodas',
+      aspectRatio: computeAspectRatio(width, height),
+      mediaType: isVideo ? 'video' : 'image',
+      url: previewUrl,
+      originalUrl,
+      videoSrc: isVideo ? originalUrl : undefined,
+      client: options?.client || 'Archivo Google Drive',
+      year: String(new Date().getFullYear()),
+      exif: {
+        camera,
+        lens: '80mm',
+        focalLength: '80mm',
+        aperture: 'f/2.8',
+        shutter: '1/320s',
+        iso: 'ISO 100',
+        resolution: `${width} × ${height}`,
+      },
+      description: `Fotografía sincronizada en alta resolución desde Google Drive (${folderDetails.name})`,
+      featured: true,
+      isFeatured: true,
+      showOnHome: options?.showOnHome ?? true,
+      order: currentItems.length + i + 1,
+    });
+  }
+
+  // Preserve non-conflicting existing items and merge new ones
+  const filteredExisting = currentItems.filter(
+    (existing) => !newItems.some((ni) => ni.id === existing.id)
+  );
+  const mergedPortfolio = [...filteredExisting, ...newItems];
+
+  savePortfolioItems(mergedPortfolio);
+
+  addActivityLog({
+    type: 'admin',
+    title: 'Portafolio Web sincronizado con Google Drive',
+    description: `Se sincronizaron ${newItems.length} obras desde la carpeta "${folderDetails.name}" de Google Drive (${newCount} nuevas obras añadidas).`,
+  });
+
+  return {
+    folderName: folderDetails.name,
+    totalSynced: newItems.length,
+    newCount,
+    items: mergedPortfolio,
+  };
+};
+
+/**
+ * Importa un archivo específico de Google Drive y lo asigna como foto maestra de la web
+ * (Hero de portada, Cinema Feature, Video Reel, Anuncio o Portada de Categoría).
+ */
+export const importDriveFileAsSitePhoto = (
+  file: GoogleDriveFile,
+  target: 'hero' | 'cinema_feature' | 'cinema_reel' | 'announcement' | string
+): string => {
+  const isVideo = file.mimeType.includes('video');
+  const highResUrl = isVideo
+    ? file.webContentLink || `https://drive.google.com/uc?id=${file.id}&export=download`
+    : file.thumbnailLink
+    ? file.thumbnailLink.replace(/=s\d+$/, '=s2048')
+    : `https://drive.google.com/thumbnail?id=${file.id}&sz=w2048`;
+
+  updateAnyWebsitePhoto(target, highResUrl);
+
+  const targetLabels: Record<string, string> = {
+    hero: 'Portada Principal (Hero)',
+    cinema_feature: 'Cinema & Feature Film',
+    cinema_reel: 'Video Reel de Fondo',
+    announcement: 'Banner de Oferta Especial',
+  };
+
+  const label = targetLabels[target] || `Sección (${target})`;
+
+  addActivityLog({
+    type: 'admin',
+    title: 'Foto maestra actualizada desde Google Drive',
+    description: `Se asignó el archivo "${file.name}" de Google Drive a "${label}".`,
+  });
+
+  return highResUrl;
 };

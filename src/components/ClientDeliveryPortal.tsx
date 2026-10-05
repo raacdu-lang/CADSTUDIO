@@ -481,7 +481,7 @@ export const ClientDeliveryPortal: React.FC<ClientDeliveryPortalProps> = ({
 
             <form onSubmit={handlePinSubmit} className="space-y-4 text-left">
               <div>
-                <label className="block text-xs font-mono-data text-zinc-400 mb-1">
+                <label className="block text-xs font-mono-data text-[#8cd2cf] mb-1 font-bold">
                   TOKEN DE ENLACE PRIVADO
                 </label>
                 <input
@@ -495,7 +495,7 @@ export const ClientDeliveryPortal: React.FC<ClientDeliveryPortalProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-mono-data text-zinc-400 mb-1">
+                <label className="block text-xs font-mono-data text-[#8cd2cf] mb-1 font-bold">
                   CÓDIGO PIN (SI APLICA)
                 </label>
                 <input

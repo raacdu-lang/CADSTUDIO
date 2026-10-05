@@ -3,6 +3,7 @@ import confetti from 'canvas-confetti';
 import { StudioConfig, ContactInquiry } from '../types';
 import { addActivityLog } from '../services/storageService';
 import { DiscoverySessionBookingWidget } from './DiscoverySessionBookingWidget';
+import { ShootSessionBookingWidget } from './ShootSessionBookingWidget';
 import {
   Send,
   MessageCircle,
@@ -16,6 +17,7 @@ import {
   ArrowRight,
   CalendarCheck,
   FileText,
+  Clapperboard,
 } from 'lucide-react';
 
 interface QuickContactProps {
@@ -23,7 +25,7 @@ interface QuickContactProps {
 }
 
 export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
-  const [activeTab, setActiveTab] = useState<'discovery' | 'quote'>('discovery');
+  const [activeTab, setActiveTab] = useState<'discovery' | 'shoot_session' | 'quote'>('discovery');
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -93,8 +95,8 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
               </h2>
             </div>
 
-            <p className="text-sm text-[#0E2931]/80 font-light leading-relaxed">
-              Agende una sesión de descubrimiento de 45 minutos directamente seleccionando el día preferido y proponiendo su horario con Mateo Valenzuela en Culiacán, o solicite un presupuesto a medida para su evento o producción comercial.
+            <p className="text-sm text-[#0E2931] font-normal leading-relaxed">
+              Agende una sesión de descubrimiento de 1 hora directamente seleccionando el día preferido y proponiendo su horario con Mateo Valenzuela en Culiacán, programe una fecha para su sesión de fotos y/o videos, o solicite un presupuesto a medida para su producción.
             </p>
 
             {/* Direct Studio Data Points (Zero Pill discipline) */}
@@ -150,30 +152,43 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
           {/* Right Column: Google Calendar Booking & Fast Form */}
           <div className="lg:col-span-7 space-y-4">
             {/* View Mode Tabs */}
-            <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-white border border-[#2B7574]/30 shadow-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-1.5 rounded-2xl bg-white border border-[#2B7574]/30 shadow-xs">
               <button
                 type="button"
                 onClick={() => setActiveTab('discovery')}
-                className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
+                className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 text-center ${
                   activeTab === 'discovery'
-                    ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm'
-                    : 'text-[#0E2931]/80 hover:text-[#0E2931] hover:bg-[#2B7574]/10'
+                    ? 'bg-[#2B7574] text-white shadow-sm'
+                    : 'text-[#0E2931] hover:bg-[#2B7574]/10'
                 }`}
               >
-                <CalendarCheck className="w-3.5 h-3.5" />
-                <span>Sesión de Descubrimiento (Calendario por Días)</span>
+                <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
+                <span>Sesión de Descubrimiento</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('shoot_session')}
+                className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 text-center ${
+                  activeTab === 'shoot_session'
+                    ? 'bg-[#2B7574] text-white shadow-sm'
+                    : 'text-[#0E2931] hover:bg-[#2B7574]/10'
+                }`}
+              >
+                <Clapperboard className="w-3.5 h-3.5 shrink-0" />
+                <span>Programación de Sesión</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setActiveTab('quote')}
-                className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 ${
+                className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 text-center ${
                   activeTab === 'quote'
-                    ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm'
-                    : 'text-[#0E2931]/80 hover:text-[#0E2931] hover:bg-[#2B7574]/10'
+                    ? 'bg-[#2B7574] text-white shadow-sm'
+                    : 'text-[#0E2931] hover:bg-[#2B7574]/10'
                 }`}
               >
-                <FileText className="w-3.5 h-3.5" />
+                <FileText className="w-3.5 h-3.5 shrink-0" />
                 <span>Solicitud de Presupuesto Directo</span>
               </button>
             </div>
@@ -182,6 +197,13 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
             {activeTab === 'discovery' && (
               <div className="p-6 sm:p-8 rounded-2xl bg-white border border-[#2B7574]/30 shadow-xl relative text-[#0E2931]">
                 <DiscoverySessionBookingWidget config={config} />
+              </div>
+            )}
+
+            {/* TAB 2: Shoot Session Booking Widget (Programación de Sesión de Fotos/Video) */}
+            {activeTab === 'shoot_session' && (
+              <div className="p-6 sm:p-8 rounded-2xl bg-white border border-[#2B7574]/30 shadow-xl relative text-[#0E2931]">
+                <ShootSessionBookingWidget config={config} />
               </div>
             )}
 
@@ -221,7 +243,7 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                   <form onSubmit={handleSubmit} className="space-y-4 text-xs">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                        <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                           NOMBRE Y APELLIDO *
                         </label>
                         <input
@@ -230,12 +252,12 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                           value={formData.name}
                           onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                           placeholder="ej. Elena Martín"
-                          className="w-full px-3.5 py-2.5 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574]"
+                          className="w-full px-3.5 py-2.5 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-semibold focus:outline-none focus:border-[#2B7574] placeholder:text-zinc-500 shadow-2xs"
                         />
                       </div>
 
                       <div>
-                        <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                        <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                           EMAIL DE CONTACTO *
                         </label>
                         <input
@@ -244,20 +266,20 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                           value={formData.email}
                           onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                           placeholder="elena@marca.com"
-                          className="w-full px-3.5 py-2.5 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574]"
+                          className="w-full px-3.5 py-2.5 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-semibold focus:outline-none focus:border-[#2B7574] placeholder:text-zinc-500 shadow-2xs"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                        <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                           TIPO DE PRODUCCIÓN
                         </label>
                         <select
                           value={formData.shootType}
                           onChange={(e) => setFormData({ ...formData, shootType: e.target.value })}
-                          className="w-full px-3 py-2.5 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574]"
+                          className="w-full px-3 py-2.5 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-semibold focus:outline-none focus:border-[#2B7574] shadow-2xs"
                         >
                           {shootTypes.map((t) => (
                             <option key={t.id} value={t.id}>
@@ -268,26 +290,26 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                       </div>
 
                       <div>
-                        <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                        <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                           FECHA ESTIMADA DEL RODAJE
                         </label>
                         <input
                           type="date"
                           value={formData.date}
                           onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                          className="w-full px-3.5 py-2 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574]"
+                          className="w-full px-3.5 py-2 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-semibold focus:outline-none focus:border-[#2B7574] shadow-2xs"
                         />
                       </div>
                     </div>
 
                     <div>
-                      <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                      <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                         RANGO DE PRESUPUESTO
                       </label>
                       <select
                         value={formData.budgetRange}
                         onChange={(e) => setFormData({ ...formData, budgetRange: e.target.value })}
-                        className="w-full px-3 py-2.5 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574]"
+                        className="w-full px-3 py-2.5 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-semibold focus:outline-none focus:border-[#2B7574] shadow-2xs"
                       >
                         <option value="1.000€ - 2.500€">1.000€ - 2.500€ (Retrato / Sesión corta)</option>
                         <option value="2.500€ - 5.000€">2.500€ - 5.000€ (Editorial / Campaña digital)</option>
@@ -297,7 +319,7 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                     </div>
 
                     <div>
-                      <label className="block font-mono-data text-[#0E2931]/75 mb-1 font-semibold">
+                      <label className="block font-mono-data text-[#061418] mb-1.5 font-bold text-xs tracking-wide">
                         DETALLES DEL PROYECTO & LOCACIÓN *
                       </label>
                       <textarea
@@ -306,7 +328,7 @@ export const QuickContact: React.FC<QuickContactProps> = ({ config }) => {
                         value={formData.message}
                         onChange={(e) => setFormData({ ...formData, message: e.target.value })}
                         placeholder="Cuéntenos sobre el concepto visual, fechas, locaciones y entregables esperados..."
-                        className="w-full p-3 rounded-lg bg-[#E2E2E0]/40 border border-[#2B7574]/40 text-[#0E2931] text-xs focus:outline-none focus:border-[#2B7574] leading-relaxed"
+                        className="w-full p-3 rounded-lg bg-zinc-50 border-2 border-[#2B7574]/40 text-[#061418] text-xs font-medium focus:outline-none focus:border-[#2B7574] leading-relaxed placeholder:text-zinc-500 shadow-2xs"
                       />
                     </div>
 

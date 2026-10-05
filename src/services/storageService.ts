@@ -10,7 +10,12 @@ import {
   StudioAnnouncement,
   StudioCategory,
   DiscoverySessionBooking,
+  CategoryClickStat,
+  StudioStats,
+  EmailNotificationLog,
 } from '../types';
+
+export type { StudioStats, CategoryClickStat, EmailNotificationLog };
 import {
   INITIAL_STUDIO_CONFIG,
   INITIAL_PORTFOLIO_ITEMS,
@@ -22,7 +27,7 @@ import {
   INITIAL_STUDIO_CATEGORIES,
 } from '../data/initialData';
 import { db } from '../firebase';
-import { doc, setDoc, deleteDoc, getDocs, collection } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, getDoc, getDocs, collection } from 'firebase/firestore';
 
 const STORAGE_KEYS = {
   CONFIG: 'cadstudio_config_v2',
@@ -35,6 +40,7 @@ const STORAGE_KEYS = {
   CLIENT_CONVERSATIONS: 'cadstudio_client_conversations_v2',
   ANNOUNCEMENT: 'cadstudio_announcement_v1',
   DISCOVERY_BOOKINGS: 'cadstudio_discovery_bookings_v1',
+  EMAIL_NOTIFICATIONS: 'cadstudio_email_notifications_v1',
 };
 
 // Listeners for real-time reactivity within app
@@ -75,16 +81,40 @@ export const saveStudioConfig = (config: StudioConfig): void => {
   } catch (e) {
     console.error('Failed to save studio config', e);
   }
+
+  // Cloud Firestore database persistence
+  try {
+    setDoc(doc(db, 'studio_config', 'main_config'), config, { merge: true }).catch((err) =>
+      console.warn('Firestore studio_config sync warning:', err)
+    );
+  } catch (err) {
+    console.warn(err);
+  }
 };
 
 export const getPortfolioItems = (): PortfolioItem[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.PORTFOLIO);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const items: PortfolioItem[] = JSON.parse(raw);
+      return items.map((item) => {
+        const featuredBool =
+          item.isFeatured !== undefined ? item.isFeatured : (item.featured ?? true);
+        return {
+          ...item,
+          isFeatured: featuredBool,
+          featured: featuredBool,
+          showOnHome: item.showOnHome !== undefined ? item.showOnHome : featuredBool,
+        };
+      });
+    }
   } catch (e) {
     console.error('Failed to load portfolio items', e);
   }
-  return INITIAL_PORTFOLIO_ITEMS;
+  return INITIAL_PORTFOLIO_ITEMS.map((item) => ({
+    ...item,
+    isFeatured: item.isFeatured !== undefined ? item.isFeatured : (item.featured ?? true),
+  }));
 };
 
 export const savePortfolioItems = (items: PortfolioItem[]): void => {
@@ -92,6 +122,153 @@ export const savePortfolioItems = (items: PortfolioItem[]): void => {
     localStorage.setItem(STORAGE_KEYS.PORTFOLIO, JSON.stringify(items));
   } catch (e) {
     console.error('Failed to save portfolio items', e);
+  }
+
+  // Cloud Firestore database persistence
+  try {
+    setDoc(
+      doc(db, 'portfolio_items', 'master_list'),
+      { items, updatedAt: new Date().toISOString() },
+      { merge: true }
+    ).catch((err) => console.warn('Firestore portfolio_items sync warning:', err));
+  } catch (err) {
+    console.warn(err);
+  }
+};
+
+export const updatePortfolioItem = (item: PortfolioItem): PortfolioItem[] => {
+  const items = getPortfolioItems();
+  const exists = items.some((p) => p.id === item.id);
+  const updatedItem: PortfolioItem = {
+    ...item,
+    isFeatured: item.isFeatured !== undefined ? item.isFeatured : (item.featured ?? true),
+  };
+  const updated = exists
+    ? items.map((p) => (p.id === item.id ? updatedItem : p))
+    : [updatedItem, ...items];
+  savePortfolioItems(updated);
+  return updated;
+};
+
+export const togglePortfolioItemFeatured = (id: string): PortfolioItem[] => {
+  const items = getPortfolioItems();
+  const updated = items.map((p) => {
+    if (p.id === id) {
+      const currentVal = p.isFeatured !== false;
+      const nextVal = !currentVal;
+      return { ...p, isFeatured: nextVal, featured: nextVal };
+    }
+    return p;
+  });
+  savePortfolioItems(updated);
+  const target = updated.find((p) => p.id === id);
+  addActivityLog({
+    type: 'admin',
+    title: target?.isFeatured
+      ? 'Obra visible en Portafolio Público'
+      : 'Obra oculta del Portafolio Público (Solo Admin)',
+    description: `"${target?.title}" ${
+      target?.isFeatured
+        ? 'ahora es visible para el público en la web'
+        : 'permanece oculta en el panel de administrador'
+    }.`,
+  });
+  return updated;
+};
+
+export const togglePortfolioItemShowOnHome = (id: string): PortfolioItem[] => {
+  const items = getPortfolioItems();
+  const updated = items.map((p) => {
+    if (p.id === id) {
+      const currentVal = p.showOnHome !== false;
+      return { ...p, showOnHome: !currentVal };
+    }
+    return p;
+  });
+  savePortfolioItems(updated);
+  const target = updated.find((p) => p.id === id);
+  addActivityLog({
+    type: 'admin',
+    title: target?.showOnHome ? 'Obra añadida a Portada' : 'Obra reservada solo para Portafolio Completo',
+    description: `"${target?.title}" ahora ${target?.showOnHome ? 'se muestra en la página principal' : 'solo es visible en el portafolio completo'}.`,
+  });
+  return updated;
+};
+
+export const reorderPortfolioItems = (orderedIds: string[]): PortfolioItem[] => {
+  const items = getPortfolioItems();
+  const idMap = new Map(items.map((it) => [it.id, it]));
+  const reordered: PortfolioItem[] = [];
+  orderedIds.forEach((id, index) => {
+    const it = idMap.get(id);
+    if (it) {
+      reordered.push({ ...it, order: index + 1 });
+      idMap.delete(id);
+    }
+  });
+  // Append any remaining items
+  idMap.forEach((it) => reordered.push(it));
+  savePortfolioItems(reordered);
+  addActivityLog({
+    type: 'admin',
+    title: 'Acomodo de obras actualizado',
+    description: `Se modificó el orden visual de las fotografías en el portafolio.`,
+  });
+  return reordered;
+};
+
+export const reorderClientGalleryFiles = (
+  galleryId: string,
+  orderedFileIds: string[]
+): ClientGallery | undefined => {
+  const galleries = getClientGalleries();
+  const index = galleries.findIndex((g) => g.id === galleryId);
+  if (index === -1) return undefined;
+
+  const gallery = galleries[index];
+  const fileMap = new Map(gallery.files.map((f) => [f.id, f]));
+  const reordered: ClientFile[] = [];
+  orderedFileIds.forEach((id) => {
+    const f = fileMap.get(id);
+    if (f) {
+      reordered.push(f);
+      fileMap.delete(id);
+    }
+  });
+  fileMap.forEach((f) => reordered.push(f));
+  gallery.files = reordered;
+  saveClientGalleries(galleries);
+  return gallery;
+};
+
+export const updateAnyWebsitePhoto = (
+  target: 'hero' | 'cinema_feature' | 'cinema_reel' | 'announcement' | string,
+  newUrl: string
+): void => {
+  if (target === 'hero') {
+    const cfg = getStudioConfig();
+    cfg.heroImage = newUrl;
+    saveStudioConfig(cfg);
+  } else if (target === 'cinema_feature') {
+    const cfg = getStudioConfig();
+    cfg.cinemaFeatureImage = newUrl;
+    saveStudioConfig(cfg);
+  } else if (target === 'cinema_reel') {
+    const cfg = getStudioConfig();
+    cfg.cinemaReelImage = newUrl;
+    saveStudioConfig(cfg);
+  } else if (target === 'announcement') {
+    const ann = getAnnouncement();
+    ann.imageUrl = newUrl;
+    saveAnnouncement(ann);
+  } else if (target.startsWith('cat_')) {
+    const catId = target.replace('cat_', '');
+    updateStudioCategoryPhoto(catId, newUrl);
+  } else if (target.startsWith('port_')) {
+    const itemId = target.replace('port_', '');
+    const items = getPortfolioItems();
+    const updated = items.map((it) => (it.id === itemId ? { ...it, url: newUrl, originalUrl: newUrl } : it));
+    savePortfolioItems(updated);
   }
 };
 
@@ -115,6 +292,17 @@ export const saveStudioCategories = (categories: StudioCategory[]): void => {
     });
   } catch (e) {
     console.error('Failed to save categories', e);
+  }
+
+  // Cloud Firestore database persistence
+  try {
+    setDoc(
+      doc(db, 'studio_categories', 'all_categories'),
+      { categories, updatedAt: new Date().toISOString() },
+      { merge: true }
+    ).catch((err) => console.warn('Firestore studio_categories sync warning:', err));
+  } catch (err) {
+    console.warn(err);
   }
 };
 
@@ -168,6 +356,17 @@ export const saveClientGalleries = (galleries: ClientGallery[]): void => {
     localStorage.setItem(STORAGE_KEYS.CLIENT_GALLERIES, JSON.stringify(galleries));
   } catch (e) {
     console.error('Failed to save client galleries', e);
+  }
+
+  // Cloud Firestore database persistence
+  try {
+    galleries.forEach((gal) => {
+      setDoc(doc(db, 'client_galleries', gal.id), gal, { merge: true }).catch((err) =>
+        console.warn('Firestore gallery sync warning:', err)
+      );
+    });
+  } catch (err) {
+    console.warn(err);
   }
 };
 
@@ -381,6 +580,15 @@ export const addActivityLog = (
   } catch (e) {
     console.error('Failed to save activity log', e);
   }
+
+  // Cloud Firestore database persistence
+  try {
+    setDoc(doc(db, 'activity_notifications', newLog.id), newLog, { merge: true }).catch((err) =>
+      console.warn('Firestore activity_notifications sync warning:', err)
+    );
+  } catch (err) {
+    console.warn(err);
+  }
   activityListeners.forEach((fn) => {
     try {
       fn(newLog);
@@ -390,22 +598,59 @@ export const addActivityLog = (
   });
 };
 
-export interface StudioStats {
-  totalVisits: number;
-  clientViews: number;
-  totalDownloads: number;
-  activeGalleries: number;
-  monthlyDownloads: { month: string; count: number }[];
-  categoryEngagement: { category: string; views: number }[];
-}
+export const INITIAL_CATEGORY_CLICKS: CategoryClickStat[] = [
+  { categoryId: 'bodas', categoryName: 'Bodas & Coberturas', clicks: 1420, views: 5420, percentage: 34.3, lastClickedAt: new Date(Date.now() - 1000 * 60 * 12).toISOString() },
+  { categoryId: 'gastronomia', categoryName: 'Gastronomía de Autor', clicks: 1180, views: 4210, percentage: 28.5, lastClickedAt: new Date(Date.now() - 1000 * 60 * 35).toISOString() },
+  { categoryId: 'arquitectura', categoryName: 'Arquitectura & Espacios', clicks: 890, views: 3190, percentage: 21.5, lastClickedAt: new Date(Date.now() - 1000 * 60 * 95).toISOString() },
+  { categoryId: 'retratos', categoryName: 'Retratos de Autor', clicks: 645, views: 2000, percentage: 15.6, lastClickedAt: new Date(Date.now() - 1000 * 60 * 180).toISOString() },
+];
 
 export const getStats = (): StudioStats => {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.STATS);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const stats: StudioStats = JSON.parse(raw);
+      // Ensure categoryClicks exists and has up-to-date categories
+      if (!stats.categoryClicks || stats.categoryClicks.length === 0) {
+        stats.categoryClicks = [...INITIAL_CATEGORY_CLICKS];
+      }
+
+      // Merge any new custom studio categories that might have been created
+      try {
+        const categories = getStudioCategories();
+        categories.forEach((cat) => {
+          const exists = stats.categoryClicks?.some(
+            (c) => c.categoryId.toLowerCase() === cat.id.toLowerCase() || c.categoryName.toLowerCase() === cat.label.toLowerCase()
+          );
+          if (!exists) {
+            stats.categoryClicks?.push({
+              categoryId: cat.id,
+              categoryName: cat.label,
+              clicks: 0,
+              views: 0,
+              percentage: 0,
+              lastClickedAt: new Date().toISOString(),
+            });
+          }
+        });
+      } catch (err) {
+        console.warn('Could not merge dynamic categories into stats:', err);
+      }
+
+      // Calculate relative percentages
+      const totalClicks = (stats.categoryClicks || []).reduce((acc, c) => acc + (c.clicks || 0), 0);
+      if (totalClicks > 0 && stats.categoryClicks) {
+        stats.categoryClicks.forEach((c) => {
+          c.percentage = Number(((c.clicks / totalClicks) * 100).toFixed(1));
+        });
+      }
+
+      return stats;
+    }
   } catch (e) {
     console.error('Failed to load stats', e);
   }
+
   return {
     totalVisits: 14820,
     clientViews: 324,
@@ -419,11 +664,12 @@ export const getStats = (): StudioStats => {
       { month: 'Septiembre', count: 186 },
     ],
     categoryEngagement: [
-      { category: 'Bodas & Coberturas', views: 5420 },
-      { category: 'Gastronomía de Autor', views: 4210 },
-      { category: 'Arquitectura & Espacios', views: 3190 },
-      { category: 'Retratos de Autor', views: 2000 },
+      { category: 'Bodas & Coberturas', views: 5420, clicks: 1420 },
+      { category: 'Gastronomía de Autor', views: 4210, clicks: 1180 },
+      { category: 'Arquitectura & Espacios', views: 3190, clicks: 890 },
+      { category: 'Retratos de Autor', views: 2000, clicks: 645 },
     ],
+    categoryClicks: [...INITIAL_CATEGORY_CLICKS],
   };
 };
 
@@ -433,6 +679,96 @@ export const saveStats = (stats: StudioStats): void => {
   } catch (e) {
     console.error('Failed to save stats', e);
   }
+
+  // Cloud Firestore database persistence
+  try {
+    setDoc(
+      doc(db, 'studio_stats', 'main_stats'),
+      { ...stats, updatedAt: new Date().toISOString() },
+      { merge: true }
+    ).catch((err) => console.warn('Firestore studio_stats sync warning:', err));
+  } catch (err) {
+    console.warn(err);
+  }
+};
+
+export const trackCategoryClick = (categoryId: string, categoryLabel?: string): void => {
+  if (!categoryId || categoryId === 'all') return;
+  try {
+    const stats = getStats();
+    if (!stats.categoryClicks) {
+      stats.categoryClicks = [];
+    }
+
+    // Resolve name from categoryId or categoryLabel or studioCategories
+    let name = categoryLabel;
+    if (!name) {
+      const allCats = getStudioCategories();
+      const match = allCats.find((c) => c.id === categoryId);
+      name = match ? match.label : categoryId;
+    }
+
+    const existing = stats.categoryClicks.find(
+      (c) =>
+        c.categoryId.toLowerCase() === categoryId.toLowerCase() ||
+        c.categoryName.toLowerCase() === name?.toLowerCase()
+    );
+
+    if (existing) {
+      existing.clicks = (existing.clicks || 0) + 1;
+      existing.views = (existing.views || 0) + 1;
+      existing.lastClickedAt = new Date().toISOString();
+      if (name) existing.categoryName = name;
+    } else {
+      stats.categoryClicks.push({
+        categoryId,
+        categoryName: name || categoryId,
+        clicks: 1,
+        views: 1,
+        percentage: 0,
+        lastClickedAt: new Date().toISOString(),
+      });
+    }
+
+    // Recalculate percentages
+    const totalClicks = stats.categoryClicks.reduce((acc, c) => acc + (c.clicks || 0), 0);
+    if (totalClicks > 0) {
+      stats.categoryClicks.forEach((c) => {
+        c.percentage = Number(((c.clicks / totalClicks) * 100).toFixed(1));
+      });
+    }
+
+    // Also update categoryEngagement for backward compatibility
+    const eng = stats.categoryEngagement.find(
+      (c) => c.category.toLowerCase() === (name || categoryId).toLowerCase()
+    );
+    if (eng) {
+      eng.clicks = (eng.clicks || 0) + 1;
+      eng.views = (eng.views || 0) + 1;
+    } else {
+      stats.categoryEngagement.push({
+        category: name || categoryId,
+        views: 1,
+        clicks: 1,
+      });
+    }
+
+    saveStats(stats);
+  } catch (e) {
+    console.warn('Failed to track category click:', e);
+  }
+};
+
+export const simulateCategoryClick = (categoryId: string): StudioStats => {
+  trackCategoryClick(categoryId);
+  return getStats();
+};
+
+export const resetCategoryClicks = (): StudioStats => {
+  const stats = getStats();
+  stats.categoryClicks = [...INITIAL_CATEGORY_CLICKS];
+  saveStats(stats);
+  return stats;
 };
 
 export const incrementVisitCount = (): void => {
@@ -691,6 +1027,175 @@ export const saveDiscoveryBooking = async (
     description: `Fecha: ${booking.date} a las ${booking.startTime} (${booking.format === 'google_meet' ? 'Google Meet' : 'Presencial'}). Proyecto: ${booking.shootType}.`,
     clientName: booking.clientName,
   });
+};
+
+// ==========================================
+// AUTOMATED EMAIL NOTIFICATION LOGS
+// ==========================================
+
+export const getEmailNotificationLogs = (): EmailNotificationLog[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.EMAIL_NOTIFICATIONS);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to load email notification logs', e);
+  }
+  return [];
+};
+
+export const saveEmailNotificationLog = async (
+  log: EmailNotificationLog
+): Promise<void> => {
+  const current = getEmailNotificationLogs();
+  const updated = [log, ...current.filter((l) => l.id !== log.id)].slice(0, 50);
+
+  try {
+    localStorage.setItem(STORAGE_KEYS.EMAIL_NOTIFICATIONS, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Failed to save email notification log locally', e);
+  }
+
+  // Persist to Firestore
+  try {
+    await setDoc(doc(db, 'email_notifications', log.id), log, { merge: true });
+  } catch (err) {
+    console.warn('Firestore email_notifications setDoc warning:', err);
+  }
+};
+
+// ==========================================
+// CLOUD FIRESTORE HYDRATION & REAL-TIME SYNC
+// ==========================================
+
+let isFirestoreSynced = false;
+
+export const isFirebaseConnected = (): boolean => {
+  return isFirestoreSynced;
+};
+
+/**
+ * Initializes and hydrates all local state from Firebase Firestore.
+ * If cloud documents do not exist yet, seeds them so Firebase acts as
+ * the single source of truth across all devices.
+ */
+export const initFirestoreSync = async (
+  onSyncComplete?: (status: {
+    source: 'cloud' | 'local';
+    itemsCount: number;
+    galleriesCount: number;
+  }) => void
+): Promise<void> => {
+  try {
+    let cloudItemsCount = 0;
+    let cloudGalleriesCount = 0;
+
+    // 1. Studio Config
+    const configSnap = await getDoc(doc(db, 'studio_config', 'main_config')).catch(() => null);
+    if (configSnap && configSnap.exists()) {
+      const data = configSnap.data() as StudioConfig;
+      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data));
+    } else {
+      setDoc(doc(db, 'studio_config', 'main_config'), getStudioConfig(), { merge: true }).catch(() => {});
+    }
+
+    // 2. Portfolio Items (Obras Web y Orden de Acomodo)
+    const portSnap = await getDoc(doc(db, 'portfolio_items', 'master_list')).catch(() => null);
+    if (portSnap && portSnap.exists()) {
+      const data = portSnap.data();
+      if (Array.isArray(data?.items) && data.items.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.PORTFOLIO, JSON.stringify(data.items));
+        cloudItemsCount = data.items.length;
+      }
+    } else {
+      const initialItems = getPortfolioItems();
+      cloudItemsCount = initialItems.length;
+      setDoc(
+        doc(db, 'portfolio_items', 'master_list'),
+        { items: initialItems, updatedAt: new Date().toISOString() },
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    // 3. Studio Categories
+    const catSnap = await getDoc(doc(db, 'studio_categories', 'all_categories')).catch(() => null);
+    if (catSnap && catSnap.exists()) {
+      const data = catSnap.data();
+      if (Array.isArray(data?.categories) && data.categories.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(data.categories));
+      }
+    } else {
+      setDoc(
+        doc(db, 'studio_categories', 'all_categories'),
+        { categories: getStudioCategories(), updatedAt: new Date().toISOString() },
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    // 4. Client Galleries
+    const galleriesSnap = await getDocs(collection(db, 'client_galleries')).catch(() => null);
+    if (galleriesSnap && !galleriesSnap.empty) {
+      const cloudGalleries: ClientGallery[] = [];
+      galleriesSnap.forEach((d) => {
+        cloudGalleries.push(d.data() as ClientGallery);
+      });
+      if (cloudGalleries.length > 0) {
+        localStorage.setItem(STORAGE_KEYS.CLIENT_GALLERIES, JSON.stringify(cloudGalleries));
+        cloudGalleriesCount = cloudGalleries.length;
+      }
+    } else {
+      const initialGalleries = getClientGalleries();
+      cloudGalleriesCount = initialGalleries.length;
+      initialGalleries.forEach((gal) => {
+        setDoc(doc(db, 'client_galleries', gal.id), gal, { merge: true }).catch(() => {});
+      });
+    }
+
+    // 5. Studio Announcement
+    const annSnap = await getDoc(doc(db, 'studio_announcements', 'current')).catch(() => null);
+    if (annSnap && annSnap.exists()) {
+      const data = annSnap.data() as StudioAnnouncement;
+      localStorage.setItem(STORAGE_KEYS.ANNOUNCEMENT, JSON.stringify(data));
+    }
+
+    // 6. Studio Stats & Category Clicks
+    const statsSnap = await getDoc(doc(db, 'studio_stats', 'main_stats')).catch(() => null);
+    if (statsSnap && statsSnap.exists()) {
+      const data = statsSnap.data() as StudioStats;
+      localStorage.setItem(STORAGE_KEYS.STATS, JSON.stringify(data));
+    }
+
+    // 7. Automated Email Notification Logs
+    const emailsSnap = await getDocs(collection(db, 'email_notifications')).catch(() => null);
+    if (emailsSnap && !emailsSnap.empty) {
+      const cloudEmails: EmailNotificationLog[] = [];
+      emailsSnap.forEach((d) => {
+        cloudEmails.push(d.data() as EmailNotificationLog);
+      });
+      if (cloudEmails.length > 0) {
+        cloudEmails.sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
+        localStorage.setItem(STORAGE_KEYS.EMAIL_NOTIFICATIONS, JSON.stringify(cloudEmails));
+      }
+    }
+
+    isFirestoreSynced = true;
+    if (onSyncComplete) {
+      onSyncComplete({
+        source: 'cloud',
+        itemsCount: cloudItemsCount,
+        galleriesCount: cloudGalleriesCount,
+      });
+    }
+  } catch (err) {
+    console.warn('Firestore initial synchronization ran in local-fallback mode:', err);
+    isFirestoreSynced = false;
+    if (onSyncComplete) {
+      onSyncComplete({
+        source: 'local',
+        itemsCount: getPortfolioItems().length,
+        galleriesCount: getClientGalleries().length,
+      });
+    }
+  }
 };
 
 

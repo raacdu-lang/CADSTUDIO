@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { PortfolioItem } from '../types';
+import { PortfolioItem, StudioConfig } from '../types';
 import { Film, Play, Volume2, VolumeX, Maximize2, Sparkles } from 'lucide-react';
 
 interface CinemaSectionProps {
   cinemaItems: PortfolioItem[];
+  config?: StudioConfig;
   onSelectItem: (item: PortfolioItem) => void;
 }
 
 export const CinemaSection: React.FC<CinemaSectionProps> = ({
   cinemaItems,
+  config,
   onSelectItem,
 }) => {
   const [activeVideo, setActiveVideo] = useState<string | null>(cinemaItems[0]?.id || null);
@@ -46,7 +48,7 @@ export const CinemaSection: React.FC<CinemaSectionProps> = ({
               className="group relative aspect-video rounded-2xl overflow-hidden bg-black border border-[#2B7574]/40 shadow-2xl cursor-pointer"
             >
               <img
-                src="/src/assets/images/hero_photographer_cinematic_1790312865168.jpg"
+                src={config?.cinemaFeatureImage || "/src/assets/images/hero_photographer_cinematic_1790312865168.jpg"}
                 alt="Cinematografía de autor"
                 className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-700"
               />
@@ -85,7 +87,7 @@ export const CinemaSection: React.FC<CinemaSectionProps> = ({
               className="group relative aspect-[9/16] max-h-[500px] mx-auto rounded-2xl overflow-hidden bg-black border border-[#2B7574]/40 shadow-2xl cursor-pointer"
             >
               <img
-                src="/src/assets/images/fashion_reel_vertical_1790312908204.jpg"
+                src={config?.cinemaReelImage || "/src/assets/images/fashion_reel_vertical_1790312908204.jpg"}
                 alt="Reel vertical editorial 9:16"
                 className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-700"
               />

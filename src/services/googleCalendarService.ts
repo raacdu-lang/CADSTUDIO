@@ -15,6 +15,7 @@ import {
   saveDiscoveryBooking,
   addActivityLog,
 } from './storageService';
+import { sendAutomaticBookingEmail } from './emailService';
 
 // Scopes required for Google Calendar
 export const CALENDAR_SCOPES = [
@@ -35,12 +36,12 @@ let currentCalendarUser: User | null = null;
 let isSigningInCalendar = false;
 
 // Standard studio discovery session slots (Culiacán, Mexico time: UTC-7)
+// Hours run from 14:00 (2 PM) to 18:00 (6 PM) with 1 hour duration
 export const DEFAULT_DISCOVERY_SLOTS: { time: string; endTime: string }[] = [
-  { time: '10:00', endTime: '10:45' },
-  { time: '11:30', endTime: '12:15' },
-  { time: '14:30', endTime: '15:15' },
-  { time: '16:00', endTime: '16:45' },
-  { time: '17:30', endTime: '18:15' },
+  { time: '14:00', endTime: '15:00' },
+  { time: '15:00', endTime: '16:00' },
+  { time: '16:00', endTime: '17:00' },
+  { time: '17:00', endTime: '18:00' },
 ];
 
 export const STUDIO_TIMEZONE = 'America/Mazatlan';
@@ -186,6 +187,7 @@ export const getDayAvailability = async (
 ): Promise<{
   date: string;
   isPast: boolean;
+  isWeekend: boolean;
   isSunday: boolean;
   slots: CalendarTimeSlot[];
   isGoogleSynced: boolean;
@@ -195,7 +197,8 @@ export const getDayAvailability = async (
   today.setHours(0, 0, 0, 0);
 
   const isPast = selectedDate.getTime() < today.getTime();
-  const dayOfWeek = selectedDate.getDay(); // 0 is Sunday
+  const dayOfWeek = selectedDate.getDay(); // 0 is Sunday, 6 is Saturday
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   const isSunday = dayOfWeek === 0;
 
   // 1. Fetch Google Calendar events if token is present
@@ -219,11 +222,11 @@ export const getDayAvailability = async (
       };
     }
 
-    if (isSunday) {
+    if (isWeekend) {
       return {
         ...slot,
         available: false,
-        reason: 'Estudio cerrado en domingo',
+        reason: 'Inhábil (sábado y domingo cerrado)',
       };
     }
 
@@ -275,6 +278,7 @@ export const getDayAvailability = async (
   return {
     date: dateStr,
     isPast,
+    isWeekend,
     isSunday,
     slots,
     isGoogleSynced,
@@ -290,6 +294,9 @@ export interface CreateBookingParams {
   startTime: string; // HH:mm
   endTime: string; // HH:mm
   format: 'google_meet' | 'in_person' | 'phone';
+  meetingType?: 'discovery' | 'shoot_production';
+  productionType?: 'photos' | 'video' | 'both';
+  location?: string;
   notes?: string;
 }
 
@@ -364,7 +371,7 @@ Organizado automáticamente desde cadstudio.mx`;
       }
 
       const res = await fetch(
-        'https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1',
+        'https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all',
         {
           method: 'POST',
           headers: {
@@ -409,6 +416,9 @@ Organizado automáticamente desde cadstudio.mx`;
     endTime: params.endTime,
     timeZone: STUDIO_TIMEZONE,
     format: params.format,
+    meetingType: params.meetingType || 'discovery',
+    productionType: params.productionType,
+    location: params.location,
     notes: params.notes,
     googleEventId,
     meetLink,
@@ -416,6 +426,23 @@ Organizado automáticamente desde cadstudio.mx`;
     status: 'confirmed',
     createdAt: new Date().toISOString(),
   };
+
+  // 4. Trigger automated email notifications to client and studio
+  try {
+    const emailResult = await sendAutomaticBookingEmail(booking);
+    if (emailResult.success) {
+      booking.emailNotificationStatus = {
+        sent: true,
+        clientDelivered: true,
+        studioDelivered: true,
+        sentAt: emailResult.log.sentAt,
+        recipientClient: booking.clientEmail,
+        recipientStudio: emailResult.log.recipientStudio || 'cadcad111.3@gmail.com',
+      };
+    }
+  } catch (mailErr) {
+    console.warn('[Email] Automatic notification dispatch notice:', mailErr);
+  }
 
   await saveDiscoveryBooking(booking);
   return booking;

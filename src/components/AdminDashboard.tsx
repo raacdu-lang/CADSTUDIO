@@ -13,6 +13,9 @@ import {
   StudioCategory,
   StudioAnnouncement,
   DiscoverySessionBooking,
+  StudioStats,
+  CategoryClickStat,
+  EmailNotificationLog,
 } from '../types';
 import {
   getClientGalleries,
@@ -26,6 +29,11 @@ import {
   getActivityLogs,
   addActivityLog,
   getStats,
+  saveStats,
+  trackCategoryClick,
+  simulateCategoryClick,
+  resetCategoryClicks,
+  INITIAL_CATEGORY_CLICKS,
   getBotKnowledge,
   saveBotKnowledge,
   updateBotKnowledge,
@@ -40,7 +48,19 @@ import {
   saveAnnouncement,
   getDiscoveryBookings,
   saveDiscoveryBooking,
+  updatePortfolioItem,
+  reorderPortfolioItems,
+  reorderClientGalleryFiles,
+  updateAnyWebsitePhoto,
+  togglePortfolioItemShowOnHome,
+  togglePortfolioItemFeatured,
+  getEmailNotificationLogs,
 } from '../services/storageService';
+import {
+  generateStudioNotificationEmailHtml,
+  generateClientConfirmationEmailHtml,
+  resendBookingEmailNotification,
+} from '../services/emailService';
 import {
   exportMonthlyReportPDF,
   exportMonthlyReportExcel,
@@ -64,6 +84,7 @@ import {
   Eye,
   Settings,
   Sparkles,
+  Star,
   Lock,
   KeyRound,
   ExternalLink,
@@ -90,8 +111,39 @@ import {
   FolderSync,
   CalendarCheck,
   Video,
+  ArrowUp,
+  ArrowDown,
+  ChevronsUp,
+  ChevronsDown,
+  Image as ImageIcon,
+  MoveVertical,
+  GripVertical,
+  LayoutGrid,
+  ArrowUpDown,
+  SlidersHorizontal,
+  MousePointerClick,
+  TrendingUp,
+  Trophy,
+  ArrowUpRight,
+  BarChart2,
+  Mail,
+  MailCheck,
+  Inbox,
 } from 'lucide-react';
-import { GoogleDriveSyncModal } from './GoogleDriveSyncModal';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  Cell,
+  CartesianGrid,
+  PieChart,
+  Pie,
+} from 'recharts';
+import { GoogleDriveSyncModal, DriveSyncMode } from './GoogleDriveSyncModal';
+import { isFirebaseConnected } from '../services/storageService';
 
 interface AdminDashboardProps {
   onOpenClientPortalWithToken: (token: string) => void;
@@ -123,7 +175,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [activities, setActivities] = useState<ActivityNotification[]>(getActivityLogs());
   const [botKnowledgeList, setBotKnowledgeList] = useState<BotKnowledge[]>(getBotKnowledge());
   const [conversationsList, setConversationsList] = useState<ClientConversation[]>(getClientConversations());
-  const stats = getStats();
+  const [stats, setStats] = useState<StudioStats>(getStats());
+
+  // AUTOMATED EMAIL NOTIFICATIONS STATE
+  const [emailLogs, setEmailLogs] = useState<EmailNotificationLog[]>(getEmailNotificationLogs());
+  const [selectedEmailForPreview, setSelectedEmailForPreview] = useState<{
+    title: string;
+    html: string;
+    recipient: string;
+    subject: string;
+    sentAt: string;
+  } | null>(null);
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState<boolean>(false);
+  const [testEmailStatus, setTestEmailStatus] = useState<string | null>(null);
+  const [showEmailLogsDrawer, setShowEmailLogsDrawer] = useState<boolean>(false);
+  const [resendingBookingId, setResendingBookingId] = useState<string | null>(null);
+
+  // RECHARTS CATEGORY CLICKS CHART STATE
+  const [chartViewMode, setChartViewMode] = useState<'bar' | 'pie'>('bar');
+  const [chartSortOrder, setChartSortOrder] = useState<'desc' | 'alpha'>('desc');
+  const [simulatedCategory, setSimulatedCategory] = useState<string>('bodas');
+  const [simulateToast, setSimulateToast] = useState<string | null>(null);
 
   // CATEGORIES MANAGEMENT STATE
   const [showAddCategoryModal, setShowAddCategoryModal] = useState<boolean>(false);
@@ -147,6 +219,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Modals & Forms
   const [showDriveSyncModal, setShowDriveSyncModal] = useState<boolean>(false);
   const [driveSyncGalleryId, setDriveSyncGalleryId] = useState<string | undefined>(undefined);
+  const [driveSyncMode, setDriveSyncMode] = useState<DriveSyncMode>('portfolio');
   const [showAddClientModal, setShowAddClientModal] = useState<boolean>(false);
   const [editingClient, setEditingClient] = useState<ClientGallery | null>(null);
   const [showAddPortfolioModal, setShowAddPortfolioModal] = useState<boolean>(false);
@@ -223,10 +296,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     iso: '100',
     resolution: '8368 × 4707 px',
     description: '',
+    isFeatured: true,
   });
 
   // Form states for Studio Info
   const [studioForm, setStudioForm] = useState<StudioConfig>(studioConfig);
+
+  // States for Photo & Video management across the website
+  const [portfolioFilterCategory, setPortfolioFilterCategory] = useState<string>('all');
+  const [portfolioSubTab, setPortfolioSubTab] = useState<'live_web' | 'works' | 'website_photos'>('live_web');
+  const [portfolioLocationFilter, setPortfolioLocationFilter] = useState<'all' | 'home_only' | 'full_only' | 'hidden_only'>('all');
+  const [showPhotoSwitcherModal, setShowPhotoSwitcherModal] = useState<boolean>(false);
+  const [photoSwitcherTarget, setPhotoSwitcherTarget] = useState<{
+    id: string;
+    title: string;
+    currentUrl: string;
+    sectionName: string;
+    mediaType?: MediaType;
+  } | null>(null);
+  const [photoSwitcherNewUrl, setPhotoSwitcherNewUrl] = useState<string>('');
+  const [photoSwitcherMediaType, setPhotoSwitcherMediaType] = useState<MediaType>('image');
+  const [isUploadingSwitcherFile, setIsUploadingSwitcherFile] = useState<boolean>(false);
+  const [portfolioFileUploadPreview, setPortfolioFileUploadPreview] = useState<string | null>(null);
+
+  // Graphical Drag-and-Drop state for Portfolio works
+  const [draggedPortfolioId, setDraggedPortfolioId] = useState<string | null>(null);
+  const [dragOverPortfolioId, setDragOverPortfolioId] = useState<string | null>(null);
+
+  // Graphical Light-Table / Visual Reorder Board for Client Galleries
+  const [visualReorderGallery, setVisualReorderGallery] = useState<ClientGallery | null>(null);
+  const [draggedGalleryFileId, setDraggedGalleryFileId] = useState<string | null>(null);
+  const [dragOverGalleryFileId, setDragOverGalleryFileId] = useState<string | null>(null);
 
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -673,6 +773,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             client: portfolioForm.client,
             year: portfolioForm.year,
             description: portfolioForm.description,
+            isFeatured: portfolioForm.isFeatured !== false,
+            featured: portfolioForm.isFeatured !== false,
             exif: {
               camera: portfolioForm.camera,
               lens: portfolioForm.lens,
@@ -702,6 +804,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         client: portfolioForm.client,
         year: portfolioForm.year,
         description: portfolioForm.description,
+        isFeatured: portfolioForm.isFeatured !== false,
+        featured: portfolioForm.isFeatured !== false,
+        showOnHome: portfolioForm.isFeatured !== false,
         exif: {
           camera: portfolioForm.camera,
           lens: portfolioForm.lens,
@@ -738,6 +843,275 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // REORDER PORTFOLIO WORKS (Up, Down, Top, Bottom)
+  const handleMovePortfolioItem = (id: string, direction: 'up' | 'down' | 'top' | 'bottom') => {
+    const index = portfolioItems.findIndex((p) => p.id === id);
+    if (index === -1) return;
+    const newItems = [...portfolioItems];
+    if (direction === 'up' && index > 0) {
+      const temp = newItems[index];
+      newItems[index] = newItems[index - 1];
+      newItems[index - 1] = temp;
+    } else if (direction === 'down' && index < newItems.length - 1) {
+      const temp = newItems[index];
+      newItems[index] = newItems[index + 1];
+      newItems[index + 1] = temp;
+    } else if (direction === 'top') {
+      const [item] = newItems.splice(index, 1);
+      newItems.unshift(item);
+    } else if (direction === 'bottom') {
+      const [item] = newItems.splice(index, 1);
+      newItems.push(item);
+    }
+    setPortfolioItems(newItems);
+    savePortfolioItems(newItems);
+    setSaveSuccessMsg('Acomodo de obras guardado correctamente.');
+    setTimeout(() => setSaveSuccessMsg(null), 2500);
+    if (onRefreshData) onRefreshData();
+  };
+
+  // Graphical Drag-and-Drop Drop Handler for Portfolio
+  const handleDropPortfolioItem = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    const sourceIndex = portfolioItems.findIndex((p) => p.id === sourceId);
+    const targetIndex = portfolioItems.findIndex((p) => p.id === targetId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+
+    const newItems = [...portfolioItems];
+    const [moved] = newItems.splice(sourceIndex, 1);
+    newItems.splice(targetIndex, 0, moved);
+
+    setPortfolioItems(newItems);
+    savePortfolioItems(newItems);
+    setSaveSuccessMsg(`Obra reubicada en posición #${targetIndex + 1}.`);
+    setTimeout(() => setSaveSuccessMsg(null), 2500);
+    if (onRefreshData) onRefreshData();
+  };
+
+  // Direct Position Selector (e.g. Move directly to position #2)
+  const handleSetPortfolioItemPosition = (id: string, newPositionOneBased: number) => {
+    const currentIndex = portfolioItems.findIndex((p) => p.id === id);
+    if (currentIndex === -1) return;
+    const targetIndex = Math.max(0, Math.min(portfolioItems.length - 1, newPositionOneBased - 1));
+    if (currentIndex === targetIndex) return;
+
+    const newItems = [...portfolioItems];
+    const [moved] = newItems.splice(currentIndex, 1);
+    newItems.splice(targetIndex, 0, moved);
+
+    setPortfolioItems(newItems);
+    savePortfolioItems(newItems);
+    setSaveSuccessMsg(`Obra movida a la posición #${targetIndex + 1}.`);
+    setTimeout(() => setSaveSuccessMsg(null), 2500);
+    if (onRefreshData) onRefreshData();
+  };
+
+  // Toggle between Home Page visibility and Full Portfolio Only
+  const handleTogglePortfolioHomeVisibility = (id: string) => {
+    const updated = togglePortfolioItemShowOnHome(id);
+    setPortfolioItems(updated);
+    const it = updated.find((p) => p.id === id);
+    const isNowOnHome = it?.showOnHome !== false;
+    setSaveSuccessMsg(
+      isNowOnHome
+        ? `⭐ "${it?.title}" ahora se mostrará en la Página Principal.`
+        : `📁 "${it?.title}" ahora solo se mostrará en el Portafolio Completo.`
+    );
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+    if (onRefreshData) onRefreshData();
+  };
+
+  // Toggle public portfolio visibility (isFeatured: true = public, false = hidden in admin)
+  const handleTogglePortfolioFeatured = (id: string) => {
+    const updated = togglePortfolioItemFeatured(id);
+    setPortfolioItems(updated);
+    const it = updated.find((p) => p.id === id);
+    const isPublic = it?.isFeatured !== false;
+    setSaveSuccessMsg(
+      isPublic
+        ? `🌐 "${it?.title}" ahora es visible en el portafolio público.`
+        : `🔒 "${it?.title}" permanece oculta en el panel de administrador.`
+    );
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+    if (onRefreshData) onRefreshData();
+  };
+
+  // CLIENT GALLERY REORDER FUNCTIONS
+  const handleMoveGalleryFile = (
+    galleryId: string,
+    fileId: string,
+    direction: 'up' | 'down' | 'top' | 'bottom'
+  ) => {
+    const gal = galleries.find((g) => g.id === galleryId);
+    if (!gal || !gal.files) return;
+
+    const index = gal.files.findIndex((f) => f.id === fileId);
+    if (index === -1) return;
+
+    const newFiles = [...gal.files];
+    if (direction === 'up' && index > 0) {
+      const temp = newFiles[index];
+      newFiles[index] = newFiles[index - 1];
+      newFiles[index - 1] = temp;
+    } else if (direction === 'down' && index < newFiles.length - 1) {
+      const temp = newFiles[index];
+      newFiles[index] = newFiles[index + 1];
+      newFiles[index + 1] = temp;
+    } else if (direction === 'top') {
+      const [item] = newFiles.splice(index, 1);
+      newFiles.unshift(item);
+    } else if (direction === 'bottom') {
+      const [item] = newFiles.splice(index, 1);
+      newFiles.push(item);
+    }
+
+    reorderClientGalleryFiles(galleryId, newFiles.map((f) => f.id));
+    const updatedGalleries = getClientGalleries();
+    setGalleries(updatedGalleries);
+    if (visualReorderGallery?.id === galleryId) {
+      setVisualReorderGallery({ ...visualReorderGallery, files: newFiles });
+    }
+    if (uploadTargetGallery?.id === galleryId) {
+      setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+    }
+    setSaveSuccessMsg('Acomodo de fotos de la galería guardado.');
+    setTimeout(() => setSaveSuccessMsg(null), 2000);
+  };
+
+  const handleDropGalleryFile = (galleryId: string, sourceFileId: string, targetFileId: string) => {
+    if (sourceFileId === targetFileId) return;
+    const gal = galleries.find((g) => g.id === galleryId);
+    if (!gal || !gal.files) return;
+
+    const sourceIndex = gal.files.findIndex((f) => f.id === sourceFileId);
+    const targetIndex = gal.files.findIndex((f) => f.id === targetFileId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+
+    const newFiles = [...gal.files];
+    const [moved] = newFiles.splice(sourceIndex, 1);
+    newFiles.splice(targetIndex, 0, moved);
+
+    reorderClientGalleryFiles(galleryId, newFiles.map((f) => f.id));
+    const updatedGalleries = getClientGalleries();
+    setGalleries(updatedGalleries);
+    if (visualReorderGallery?.id === galleryId) {
+      setVisualReorderGallery({ ...visualReorderGallery, files: newFiles });
+    }
+    if (uploadTargetGallery?.id === galleryId) {
+      setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+    }
+    setSaveSuccessMsg(`Foto reubicada en posición #${targetIndex + 1}.`);
+    setTimeout(() => setSaveSuccessMsg(null), 2000);
+  };
+
+  const handleSetGalleryFilePosition = (
+    galleryId: string,
+    fileId: string,
+    newPositionOneBased: number
+  ) => {
+    const gal = galleries.find((g) => g.id === galleryId);
+    if (!gal || !gal.files) return;
+
+    const currentIndex = gal.files.findIndex((f) => f.id === fileId);
+    if (currentIndex === -1) return;
+    const targetIndex = Math.max(0, Math.min(gal.files.length - 1, newPositionOneBased - 1));
+    if (currentIndex === targetIndex) return;
+
+    const newFiles = [...gal.files];
+    const [moved] = newFiles.splice(currentIndex, 1);
+    newFiles.splice(targetIndex, 0, moved);
+
+    reorderClientGalleryFiles(galleryId, newFiles.map((f) => f.id));
+    const updatedGalleries = getClientGalleries();
+    setGalleries(updatedGalleries);
+    if (visualReorderGallery?.id === galleryId) {
+      setVisualReorderGallery({ ...visualReorderGallery, files: newFiles });
+    }
+    if (uploadTargetGallery?.id === galleryId) {
+      setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+    }
+    setSaveSuccessMsg(`Foto movida a la posición #${targetIndex + 1}.`);
+    setTimeout(() => setSaveSuccessMsg(null), 2000);
+  };
+
+  const handleSetGalleryCoverFromFile = (galleryId: string, coverUrl: string) => {
+    const updated = galleries.map((g) => (g.id === galleryId ? { ...g, coverImage: coverUrl } : g));
+    saveClientGalleries(updated);
+    setGalleries(updated);
+    if (visualReorderGallery?.id === galleryId) {
+      setVisualReorderGallery({ ...visualReorderGallery, coverImage: coverUrl });
+    }
+    setSaveSuccessMsg('¡Foto establecida como nueva portada de la galería!');
+    setTimeout(() => setSaveSuccessMsg(null), 2500);
+  };
+
+  // QUICK PHOTO SWITCHER FOR ANY SECTION OR WORK
+  const handleOpenPhotoSwitcher = (target: {
+    id: string;
+    title: string;
+    currentUrl: string;
+    sectionName: string;
+    mediaType?: MediaType;
+  }) => {
+    setPhotoSwitcherTarget(target);
+    setPhotoSwitcherNewUrl(target.currentUrl);
+    setPhotoSwitcherMediaType(target.mediaType || 'image');
+    setShowPhotoSwitcherModal(true);
+  };
+
+  const handlePhotoSwitcherFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSwitcherFile(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        setPhotoSwitcherNewUrl(dataUrl);
+        if (file.type.startsWith('video/')) {
+          setPhotoSwitcherMediaType('video');
+        }
+      }
+      setIsUploadingSwitcherFile(false);
+    };
+    reader.onerror = () => {
+      setIsUploadingSwitcherFile(false);
+      alert('Error al leer el archivo.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSavePhotoSwitch = () => {
+    if (!photoSwitcherTarget || !photoSwitcherNewUrl.trim()) return;
+
+    updateAnyWebsitePhoto(photoSwitcherTarget.id, photoSwitcherNewUrl.trim());
+
+    // Update local state reactively
+    if (photoSwitcherTarget.id === 'hero') {
+      setStudioConfigState((prev) => ({ ...prev, heroImage: photoSwitcherNewUrl.trim() }));
+      setStudioForm((prev) => ({ ...prev, heroImage: photoSwitcherNewUrl.trim() }));
+    } else if (photoSwitcherTarget.id === 'cinema_feature') {
+      setStudioConfigState((prev) => ({ ...prev, cinemaFeatureImage: photoSwitcherNewUrl.trim() }));
+      setStudioForm((prev) => ({ ...prev, cinemaFeatureImage: photoSwitcherNewUrl.trim() }));
+    } else if (photoSwitcherTarget.id === 'cinema_reel') {
+      setStudioConfigState((prev) => ({ ...prev, cinemaReelImage: photoSwitcherNewUrl.trim() }));
+      setStudioForm((prev) => ({ ...prev, cinemaReelImage: photoSwitcherNewUrl.trim() }));
+    } else if (photoSwitcherTarget.id === 'announcement') {
+      setAnnouncementData((prev) => ({ ...prev, imageUrl: photoSwitcherNewUrl.trim() }));
+    } else if (photoSwitcherTarget.id.startsWith('cat_')) {
+      setCategoriesList(getStudioCategories());
+    } else if (photoSwitcherTarget.id.startsWith('port_')) {
+      setPortfolioItems(getPortfolioItems());
+    }
+
+    setShowPhotoSwitcherModal(false);
+    setSaveSuccessMsg(`¡Imagen actualizada con éxito para "${photoSwitcherTarget.title}"!`);
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+    setPhotoSwitcherTarget(null);
+    setPhotoSwitcherNewUrl('');
+    if (onRefreshData) onRefreshData();
+  };
+
   // Save Studio Profile Info
   const handleSaveStudioConfig = (e: React.FormEvent) => {
     e.preventDefault();
@@ -745,6 +1119,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStudioConfigState(studioForm);
     setSaveSuccessMsg('Información de biografía y contacto actualizada.');
     setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
+
+  // CATEGORY CLICKS RECHARTS SIMULATION HANDLERS
+  const handleSimulateCategoryClick = (catId: string) => {
+    const updatedStats = simulateCategoryClick(catId);
+    setStats(updatedStats);
+    const catLabel = categoriesList.find((c) => c.id === catId)?.label || catId;
+    setSimulateToast(`+1 Clic registrado en "${catLabel}". ¡Gráfico Recharts actualizado en tiempo real!`);
+    setTimeout(() => setSimulateToast(null), 3500);
+  };
+
+  const handleResetCategoryClicks = () => {
+    const confirmed = window.confirm(
+      '¿Deseas calibrar y reiniciar las estadísticas de clics de categorías a valores de muestra?'
+    );
+    if (confirmed) {
+      const updated = resetCategoryClicks();
+      setStats(updated);
+      setSimulateToast('Estadísticas de clics calibradas a valores base.');
+      setTimeout(() => setSimulateToast(null), 3000);
+    }
+  };
+
+  // AUTOMATED EMAIL NOTIFICATION HANDLERS
+  const handleSendTestBookingNotification = async (targetEmail: string = 'cadcad111.3@gmail.com') => {
+    setIsSendingTestEmail(true);
+    setTestEmailStatus(null);
+    try {
+      const res = await fetch('/api/test-booking-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetEmail }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTestEmailStatus(`✓ Notificación de prueba despachada exitosamente hacia ${targetEmail}`);
+        setTimeout(() => setTestEmailStatus(null), 6000);
+      } else {
+        setTestEmailStatus(`Aviso: ${data.error || 'No se pudo enviar el correo de prueba'}`);
+      }
+    } catch (err: any) {
+      setTestEmailStatus(`Aviso: ${err.message || 'Error al conectar con el servidor de correo'}`);
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  };
+
+  const handleResendBookingEmail = async (session: DiscoverySessionBooking) => {
+    setResendingBookingId(session.id);
+    try {
+      const res = await resendBookingEmailNotification(session);
+      setTestEmailStatus(res.message);
+      setEmailLogs(getEmailNotificationLogs());
+      setTimeout(() => setTestEmailStatus(null), 6000);
+    } catch (e: any) {
+      setTestEmailStatus(`Error al reenviar: ${e.message}`);
+    } finally {
+      setResendingBookingId(null);
+    }
   };
 
   // CATEGORY HANDLERS
@@ -890,12 +1323,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Admin Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-[#2B7574]/25">
           <div>
-            <div className="flex items-center gap-2 text-xs font-mono-data text-zinc-400 mb-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono-data text-zinc-400 mb-1">
               <span className="text-[#2B7574] font-semibold">PANEL ADMINISTRATIVO</span>
               <span aria-hidden="true">·</span>
-              <span>AUTENTICACIÓN ACTIVA</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-emerald-400 text-[10px] font-semibold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                Firebase Cloud Database (Tiempo Real)
+              </span>
               <span aria-hidden="true">·</span>
-              <span>{studioConfig.studioName}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setDriveSyncMode('portfolio');
+                  setShowDriveSyncModal(true);
+                }}
+                className="px-2 py-0.5 rounded-full bg-blue-950/60 border border-blue-500/40 text-blue-300 text-[10px] font-semibold flex items-center gap-1 hover:bg-blue-900/60 transition-colors cursor-pointer"
+                title="Google Drive configurado como almacén de fotos en alta resolución"
+              >
+                <FolderSync className="w-3 h-3 text-blue-400" />
+                <span>Google Drive (Almacén de Fotos)</span>
+              </button>
             </div>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#E2E2E0] tracking-tight">
               Control de Operaciones, Clientes & Portafolio
@@ -930,6 +1377,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
               <span>Excel</span>
+            </button>
+
+            {/* Direct Google Drive Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setDriveSyncMode('portfolio');
+                setShowDriveSyncModal(true);
+              }}
+              className="px-3 py-2 text-xs font-medium text-white bg-blue-700 hover:bg-blue-600 border border-blue-500/40 rounded-lg transition-colors flex items-center gap-1.5 shadow"
+              title="Abrir sincronizador de Google Drive (Portafolio, Fotos maestras o Galerías)"
+            >
+              <FolderSync className="w-3.5 h-3.5" />
+              <span>Google Drive</span>
             </button>
           </div>
         </div>
@@ -1213,6 +1674,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span>Subir Fotos ({gal.files.length})</span>
                     </button>
 
+                    {/* Mesa de Luz y Acomodo Visual Gráfico */}
+                    <button
+                      onClick={() => setVisualReorderGallery(gal)}
+                      className="px-3 py-1.5 text-xs text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] border border-[#2B7574]/60 rounded-lg transition-colors flex items-center gap-1.5 font-medium shadow-sm"
+                      title="Abrir mesa de luz gráfica y acomodo interactivo de fotos"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5 text-[#E2E2E0]" />
+                      <span>Acomodo Visual ({gal.files.length})</span>
+                    </button>
+
                     {/* Edit */}
                     <button
                       onClick={() => {
@@ -1329,64 +1800,1197 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </form>
             </div>
 
-            {/* Section B: Portfolio Works Manager */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
+            {/* Section B: Portfolio Works & Complete Website Photo Manager */}
+            <div className="space-y-6 pt-4 border-t border-[#2B7574]/30">
+              {/* Sub-tab navigation */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
                 <div>
-                  <h3 className="text-base font-bold text-white">Obras en Portafolio</h3>
-                  <p className="text-xs text-zinc-400">
-                    Administre las fotografías y videos de autor expuestos en la galería principal.
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Camera className="w-5 h-5 text-[#2B7574]" />
+                    <span>Control de Obras, Acomodo y Fotos de la Web</span>
+                  </h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Modifique el acomodo de las fotos (mover arriba/abajo/inicio/fin), añada fotos o videos, o reemplace cualquier imagen de la página.
                   </p>
                 </div>
 
-                <button
-                  onClick={() => {
-                    setEditingPortfolioItem(null);
-                    setShowAddPortfolioModal(true);
-                  }}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-zinc-100/10 hover:bg-zinc-100/20 border border-zinc-700 rounded-xl transition-colors flex items-center gap-1.5"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Añadir Nueva Obra</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="p-1 bg-[#0E2931] border border-[#2B7574]/40 rounded-xl flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => setPortfolioSubTab('live_web')}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                        portfolioSubTab === 'live_web'
+                          ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm'
+                          : 'text-zinc-300 hover:text-white'
+                      }`}
+                      title="Proyección exacta de la web editable en vivo"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Maqueta Real Web (En Vivo)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPortfolioSubTab('works')}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                        portfolioSubTab === 'works'
+                          ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm'
+                          : 'text-zinc-300 hover:text-white'
+                      }`}
+                    >
+                      <MoveVertical className="w-3.5 h-3.5" />
+                      <span>Acomodo & Tira ({portfolioItems.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPortfolioSubTab('website_photos')}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+                        portfolioSubTab === 'website_photos'
+                          ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm'
+                          : 'text-zinc-300 hover:text-white'
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>Fotos de Toda la Web (8)</span>
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDriveSyncMode('portfolio');
+                      setShowDriveSyncModal(true);
+                    }}
+                    className="px-3.5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-700 to-blue-600 hover:from-blue-600 hover:to-blue-500 rounded-xl transition-all flex items-center gap-1.5 shrink-0 shadow-lg shadow-blue-950/40"
+                    title="Importar y sincronizar fotos desde Google Drive directamente al portafolio"
+                  >
+                    <FolderSync className="w-4 h-4" />
+                    <span>Sincronizar Google Drive</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setEditingPortfolioItem(null);
+                      setPortfolioForm({
+                        title: '',
+                        category: (categoriesList[0]?.id as any) || 'bodas',
+                        aspectRatio: '16:9',
+                        mediaType: 'image',
+                        url: '',
+                        videoSrc: '',
+                        client: '',
+                        year: new Date().getFullYear().toString(),
+                        camera: 'Leica SL2-S',
+                        lens: 'Noctilux 50mm f/0.95',
+                        aperture: 'f/1.4',
+                        shutter: '1/250s',
+                        iso: '100',
+                        resolution: '8368 × 4707 px',
+                        description: '',
+                        isFeatured: true,
+                      });
+                      setPortfolioFileUploadPreview(null);
+                      setShowAddPortfolioModal(true);
+                    }}
+                    className="px-4 py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center gap-1.5 shrink-0 shadow-lg"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Añadir Obra (Foto/Video)</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {portfolioItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-4 rounded-xl bg-[#121215] border border-[#242429] flex flex-col justify-between gap-3"
-                  >
-                    <div className="space-y-2">
-                      <div className="relative aspect-video rounded-lg overflow-hidden bg-black">
-                        <img
-                          src={item.url}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                        />
-                        <span className="absolute top-2 left-2 text-[10px] font-mono-data bg-black/70 px-2 py-0.5 rounded text-white border border-white/10">
-                          {item.aspectRatio} · {item.mediaType}
-                        </span>
+              {/* VIEW 0: MAQUETA REAL DE LA WEB EDITABLE EN VIVO (PROYECCIÓN VISUAL) */}
+              {portfolioSubTab === 'live_web' && (
+                <div className="space-y-6">
+                  {/* Top Bar with Curation Controls & Location Filters */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-[#0E2931] border border-[#2B7574]/50 shadow-xl space-y-4">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Eye className="w-5 h-5 text-[#2B7574]" />
+                          <h4 className="text-sm font-bold text-white uppercase tracking-wide">
+                            Proyección Real de la Galería Web · Editor Visual en Vivo
+                          </h4>
+                        </div>
+                        <p className="text-xs text-zinc-300 mt-1 max-w-3xl leading-relaxed">
+                          Esta vista proyecta la galería con la diagramación y proporciones reales del sitio web. Puedes arrastrar fotos para reordenarlas, cambiar cualquier imagen con un clic y definir con el botón de estrella cuáles fotos se muestran en la <strong>Página Principal</strong> y cuáles quedan exclusivamente en el <strong>Portafolio Completo</strong>.
+                        </p>
                       </div>
 
-                      <h4 className="text-xs font-bold text-white truncate">{item.title}</h4>
-                      <p className="text-[11px] font-mono-data text-zinc-400">
-                        Categoría: {categoriesList.find((c) => c.id === item.category)?.label || item.category} · {item.year}
-                      </p>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="px-3 py-1.5 rounded-full text-xs font-mono-data bg-[#2B7574] text-[#E2E2E0] font-bold shadow">
+                          ⭐ {portfolioItems.filter((p) => p.showOnHome !== false).length} en Portada
+                        </span>
+                        <span className="px-3 py-1.5 rounded-full text-xs font-mono-data bg-black/60 text-zinc-300 border border-white/10 font-semibold">
+                          📁 {portfolioItems.length} en Archivo Master
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                    {/* Filter Pills: By Location (Home vs Full) & Category */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#2B7574]/30">
+                      {/* Location Filter */}
+                      <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-[#070e11] border border-[#2B7574]/30">
+                        <span className="text-[10px] font-mono-data text-zinc-400 px-2 font-bold">FILTRAR POR DESTINO:</span>
+                        <button
+                          type="button"
+                          onClick={() => setPortfolioLocationFilter('all')}
+                          className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                            portfolioLocationFilter === 'all'
+                              ? 'bg-[#2B7574] text-white shadow'
+                              : 'text-zinc-300 hover:text-white'
+                          }`}
+                        >
+                          Todas ({portfolioItems.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPortfolioLocationFilter('home_only')}
+                          className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                            portfolioLocationFilter === 'home_only'
+                              ? 'bg-amber-400 text-black shadow font-bold'
+                              : 'text-amber-300 hover:text-white'
+                          }`}
+                        >
+                          <Star className="w-3.5 h-3.5 fill-current" />
+                          <span>En Portada ({portfolioItems.filter((p) => p.isFeatured !== false && p.showOnHome !== false).length})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPortfolioLocationFilter('full_only')}
+                          className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors ${
+                            portfolioLocationFilter === 'full_only'
+                              ? 'bg-zinc-700 text-white shadow font-bold'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          Portafolio Completo ({portfolioItems.filter((p) => p.isFeatured !== false && p.showOnHome === false).length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPortfolioLocationFilter('hidden_only')}
+                          className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 ${
+                            portfolioLocationFilter === 'hidden_only'
+                              ? 'bg-rose-950 text-rose-200 border border-rose-500 shadow font-bold'
+                              : 'text-rose-400 hover:text-white'
+                          }`}
+                          title="Obras que no aparecen en la web pública y solo se ven en el admin"
+                        >
+                          <Lock className="w-3 h-3" />
+                          <span>Ocultas en Admin ({portfolioItems.filter((p) => p.isFeatured === false).length})</span>
+                        </button>
+                      </div>
+
+                      {/* Category Pills */}
+                      <div className="flex items-center gap-1 overflow-x-auto pb-1 max-w-full">
+                        <button
+                          type="button"
+                          onClick={() => setPortfolioFilterCategory('all')}
+                          className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                            portfolioFilterCategory === 'all'
+                              ? 'bg-[#2B7574] text-white font-bold shadow'
+                              : 'text-zinc-300 hover:bg-white/10'
+                          }`}
+                        >
+                          Todas
+                        </button>
+                        {categoriesList.map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setPortfolioFilterCategory(cat.id)}
+                            className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                              portfolioFilterCategory === cat.id
+                                ? 'bg-[#2B7574] text-white font-bold shadow'
+                                : 'text-zinc-300 hover:bg-white/10'
+                            }`}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* THE REAL WEB PROJECTION CONTAINER (Authentic Web Layout with Editable Overlays) */}
+                  <div className="bg-[#E2E2E0] rounded-3xl p-6 sm:p-8 border-2 border-[#2B7574]/40 shadow-2xl text-[#0E2931]">
+                    {/* Authentic Website Section Header Preview */}
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 mb-6 border-b border-[#2B7574]/25">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs font-mono-data text-[#0E2931]/70 mb-1.5">
+                          <span className="text-[#2B7574] font-bold uppercase">OBRAS SELECCIONADAS</span>
+                          <span aria-hidden="true">·</span>
+                          <span>RESOLUCIÓN MASTER</span>
+                          <span aria-hidden="true">·</span>
+                          <span>CADSTUDIO CULIACÁN</span>
+                        </div>
+                        <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#0E2931] tracking-tight">
+                          Portafolio de Autor
+                        </h2>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono-data text-[#2B7574] font-bold bg-[#2B7574]/15 px-3 py-1.5 rounded-lg border border-[#2B7574]/30 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-[#2B7574]" />
+                          <span>Modo Edición en Vivo — Pasa el ratón o arrastra cualquier obra</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* The Masonry Grid matching PortfolioGallery.tsx columns exactly */}
+                    <div className="columns-1 sm:columns-2 md:columns-3 lg:columns-4 gap-3 [column-fill:_balance]">
+                      {portfolioItems
+                        .map((item, originalIndex) => ({ item, originalIndex }))
+                        .filter(({ item }) => {
+                          if (portfolioFilterCategory !== 'all' && item.category !== portfolioFilterCategory) return false;
+                          if (portfolioLocationFilter === 'home_only') return item.isFeatured !== false && item.showOnHome !== false;
+                          if (portfolioLocationFilter === 'full_only') return item.isFeatured !== false && item.showOnHome === false;
+                          if (portfolioLocationFilter === 'hidden_only') return item.isFeatured === false;
+                          return true;
+                        })
+                        .map(({ item, originalIndex }) => {
+                          const isDragging = draggedPortfolioId === item.id;
+                          const isDragOver = dragOverPortfolioId === item.id;
+                          const isOnHome = item.showOnHome !== false;
+                          const isPublic = item.isFeatured !== false;
+
+                          return (
+                            <div
+                              key={`live-${item.id}`}
+                              draggable
+                              onDragStart={(e) => {
+                                e.dataTransfer.setData('text/plain', item.id);
+                                setDraggedPortfolioId(item.id);
+                              }}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                if (dragOverPortfolioId !== item.id) setDragOverPortfolioId(item.id);
+                              }}
+                              onDragLeave={() => {
+                                if (dragOverPortfolioId === item.id) setDragOverPortfolioId(null);
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const srcId = e.dataTransfer.getData('text/plain') || draggedPortfolioId;
+                                if (srcId && srcId !== item.id) handleDropPortfolioItem(srcId, item.id);
+                                setDraggedPortfolioId(null);
+                                setDragOverPortfolioId(null);
+                              }}
+                              onDragEnd={() => {
+                                setDraggedPortfolioId(null);
+                                setDragOverPortfolioId(null);
+                              }}
+                              className={`break-inside-avoid mb-3.5 group relative rounded-2xl overflow-hidden bg-[#0E2931] border transition-all duration-300 shadow-md hover:shadow-2xl select-none ${
+                                !isPublic
+                                  ? 'border-dashed border-rose-500/70 opacity-90'
+                                  : isDragging
+                                  ? 'opacity-30 border-dashed border-[#2B7574] scale-95'
+                                  : isDragOver
+                                  ? 'ring-4 ring-[#2B7574] scale-102 border-white shadow-2xl'
+                                  : 'border-[#2B7574]/40 hover:border-[#2B7574]'
+                              }`}
+                            >
+                              {/* Media Container with accurate aspect ratio */}
+                              <div className={`relative w-full overflow-hidden ${
+                                item.aspectRatio === '16:9' ? 'aspect-[16/9]' :
+                                item.aspectRatio === '9:16' ? 'aspect-[9/16]' :
+                                item.aspectRatio === '3:4' ? 'aspect-[3/4]' :
+                                item.aspectRatio === '1:1' ? 'aspect-square' :
+                                'aspect-[4/3]'
+                              } bg-black`}>
+                                <img
+                                  src={item.url}
+                                  alt={item.title}
+                                  className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-500"
+                                />
+
+                                {/* Permanent Top Banner Overlays */}
+                                <div className="absolute top-2 left-2 right-2 flex flex-wrap items-center justify-between gap-1 z-20 pointer-events-auto">
+                                  <div className="flex items-center gap-1">
+                                    {/* isFeatured Public vs Hidden Toggle Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleTogglePortfolioFeatured(item.id);
+                                      }}
+                                      className={`px-2 py-0.5 rounded-full text-[9px] font-mono-data font-bold flex items-center gap-1 shadow-md transition-all ${
+                                        isPublic
+                                          ? 'bg-blue-600 hover:bg-blue-500 text-white border border-blue-400/40'
+                                          : 'bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-500/80 ring-1 ring-rose-500/40'
+                                      }`}
+                                      title={
+                                        isPublic
+                                          ? 'Obra PÚBLICA en el portafolio. Clic para OCULTAR y dejar solo en el panel de administrador.'
+                                          : 'Obra OCULTA (Solo Admin). Clic para hacerla PÚBLICA en la web.'
+                                      }
+                                    >
+                                      {isPublic ? (
+                                        <>
+                                          <Eye className="w-2.5 h-2.5 text-white" />
+                                          <span>PÚBLICA</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Lock className="w-2.5 h-2.5 text-rose-400" />
+                                          <span>OCULTA</span>
+                                        </>
+                                      )}
+                                    </button>
+
+                                    {/* Location Toggle Badge */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleTogglePortfolioHomeVisibility(item.id);
+                                      }}
+                                      className={`px-2 py-0.5 rounded-full text-[9px] font-mono-data font-bold flex items-center gap-1 shadow-md transition-all ${
+                                        isOnHome
+                                          ? 'bg-[#2B7574] hover:bg-[#3b9493] text-[#E2E2E0] border border-white/20'
+                                          : 'bg-black/80 hover:bg-[#2B7574] text-zinc-300 hover:text-white border border-white/10'
+                                      }`}
+                                      title={
+                                        isOnHome
+                                          ? 'Mostrado en Portada. Clic para quitar y dejar solo en el portafolio completo.'
+                                          : 'Exclusivo del Portafolio Completo. Clic para mostrar también en la Portada.'
+                                      }
+                                    >
+                                      <Star className={`w-2.5 h-2.5 ${isOnHome ? 'fill-amber-300 text-amber-300' : 'text-zinc-400'}`} />
+                                      <span>{isOnHome ? 'HOME' : 'FULL'}</span>
+                                    </button>
+                                  </div>
+
+                                  {/* Position & Drag Grip */}
+                                  <div className="flex items-center gap-1 bg-black/80 backdrop-blur-md px-1.5 py-0.5 rounded-lg border border-white/20 text-[#E2E2E0]">
+                                    <div
+                                      className="cursor-grab active:cursor-grabbing p-0.5 text-[#2B7574]"
+                                      title="Arrastrar para cambiar lugar en la web"
+                                    >
+                                      <GripVertical className="w-3.5 h-3.5" />
+                                    </div>
+                                    <select
+                                      value={originalIndex + 1}
+                                      onChange={(e) => handleSetPortfolioItemPosition(item.id, Number(e.target.value))}
+                                      className="bg-transparent text-[11px] font-mono-data font-bold text-white focus:outline-none cursor-pointer"
+                                      title="Cambiar posición directamente"
+                                    >
+                                      {portfolioItems.map((_, idx) => (
+                                        <option key={idx + 1} value={idx + 1} className="bg-[#0E2931] text-white">
+                                          #{idx + 1}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Video Indicator if applicable */}
+                                {item.mediaType === 'video' && (
+                                  <div className="absolute top-11 left-2 p-1.5 rounded-full bg-[#2B7574] text-white shadow-md z-10">
+                                    <Video className="w-3.5 h-3.5" />
+                                  </div>
+                                )}
+
+                                {/* Hover Control Layer: In-place Action Overlay */}
+                                <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-3 z-10">
+                                  <div className="pt-8 flex items-center justify-center gap-1.5">
+                                    {/* Quick Reorder Arrows */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleMovePortfolioItem(item.id, 'top')}
+                                      disabled={originalIndex === 0}
+                                      className="p-1.5 rounded-lg bg-black/70 hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0] transition-colors"
+                                      title="Mover al primer lugar (inicio)"
+                                    >
+                                      <ChevronsUp className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleMovePortfolioItem(item.id, 'up')}
+                                      disabled={originalIndex === 0}
+                                      className="p-1.5 rounded-lg bg-black/70 hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0] transition-colors"
+                                      title="Subir una posición"
+                                    >
+                                      <ArrowUp className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleMovePortfolioItem(item.id, 'down')}
+                                      disabled={originalIndex === portfolioItems.length - 1}
+                                      className="p-1.5 rounded-lg bg-black/70 hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0] transition-colors"
+                                      title="Bajar una posición"
+                                    >
+                                      <ArrowDown className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleMovePortfolioItem(item.id, 'bottom')}
+                                      disabled={originalIndex === portfolioItems.length - 1}
+                                      className="p-1.5 rounded-lg bg-black/70 hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0] transition-colors"
+                                      title="Mover al último lugar (fin)"
+                                    >
+                                      <ChevronsDown className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+
+                                  {/* Center: Replace Image Button */}
+                                  <div className="text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleOpenPhotoSwitcher({
+                                          id: `port_${item.id}`,
+                                          title: item.title,
+                                          currentUrl: item.url,
+                                          sectionName: `Obra #${originalIndex + 1} (${item.title})`,
+                                          mediaType: item.mediaType,
+                                        })
+                                      }
+                                      className="px-3.5 py-2 bg-[#2B7574] hover:bg-[#3b9493] text-[#E2E2E0] text-xs font-semibold rounded-xl shadow-xl flex items-center gap-1.5 mx-auto transition-transform hover:scale-105"
+                                    >
+                                      <ImageIcon className="w-3.5 h-3.5" />
+                                      <span>Cambiar Foto/Video</span>
+                                    </button>
+                                  </div>
+
+                                  {/* Bottom Info & Edit/Delete Buttons */}
+                                  <div className="space-y-1.5 bg-black/90 p-2.5 rounded-xl border border-white/10">
+                                    <div className="flex items-center justify-between">
+                                      <h4 className="text-xs font-bold text-white truncate max-w-[70%]">
+                                        {item.title}
+                                      </h4>
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingPortfolioItem(item);
+                                            setPortfolioForm({
+                                              title: item.title,
+                                              category: item.category as any,
+                                              aspectRatio: item.aspectRatio,
+                                              mediaType: item.mediaType,
+                                              url: item.url,
+                                              videoSrc: item.videoSrc || '',
+                                              client: item.client || '',
+                                              year: item.year || '2026',
+                                              camera: item.exif?.camera || 'Leica SL2-S',
+                                              lens: item.exif?.lens || 'Noctilux 50mm f/0.95',
+                                              aperture: item.exif?.aperture || 'f/1.4',
+                                              shutter: item.exif?.shutter || '1/250s',
+                                              iso: item.exif?.iso || '100',
+                                              resolution: item.exif?.resolution || '8368 × 4707 px',
+                                              description: item.description || '',
+                                              isFeatured: item.isFeatured !== false,
+                                            });
+                                            setPortfolioFileUploadPreview(item.url);
+                                            setShowAddPortfolioModal(true);
+                                          }}
+                                          className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-white"
+                                          title="Editar datos de la obra"
+                                        >
+                                          <Edit3 className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeletePortfolioItem(item.id)}
+                                          className="p-1 rounded bg-rose-950/80 hover:bg-rose-600 text-rose-300 hover:text-white"
+                                          title="Eliminar obra"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] font-mono-data text-zinc-300">
+                                      <span>{categoriesList.find((c) => c.id === item.category)?.label || item.category}</span>
+                                      <span>{item.aspectRatio}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* VIEW 1: PORTFOLIO WORKS WITH REORDER CONTROLS (DEEPLY GRAPHICAL) */}
+              {portfolioSubTab === 'works' && (
+                <div className="space-y-6">
+                  {/* Graphical Panorama Filmstrip Ribbon */}
+                  <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/50 shadow-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <LayoutGrid className="w-4 h-4 text-[#2B7574]" />
+                        <h4 className="text-xs font-bold text-[#E2E2E0] uppercase tracking-wide">
+                          Secuencia Visual Panorámica ({portfolioItems.length} Obras)
+                        </h4>
+                      </div>
+                      <span className="text-[11px] font-mono-data text-zinc-300">
+                        Este es el orden exacto en que los visitantes ven tus obras
+                      </span>
+                    </div>
+
+                    {/* Horizontal scrollable filmstrip */}
+                    <div className="flex items-center gap-2.5 overflow-x-auto pb-2 pt-1 scrollbar-thin scrollbar-thumb-[#2B7574] scrollbar-track-[#070e11]">
+                      {portfolioItems.map((item, index) => (
+                        <div
+                          key={`filmstrip-${item.id}`}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', item.id);
+                            setDraggedPortfolioId(item.id);
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            if (dragOverPortfolioId !== item.id) setDragOverPortfolioId(item.id);
+                          }}
+                          onDragLeave={() => {
+                            if (dragOverPortfolioId === item.id) setDragOverPortfolioId(null);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const srcId = e.dataTransfer.getData('text/plain') || draggedPortfolioId;
+                            if (srcId && srcId !== item.id) handleDropPortfolioItem(srcId, item.id);
+                            setDraggedPortfolioId(null);
+                            setDragOverPortfolioId(null);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedPortfolioId(null);
+                            setDragOverPortfolioId(null);
+                          }}
+                          className={`relative group shrink-0 w-24 aspect-[4/3] rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing transition-all ${
+                            draggedPortfolioId === item.id
+                              ? 'opacity-40 border-dashed border-[#2B7574] scale-95'
+                              : dragOverPortfolioId === item.id
+                              ? 'ring-2 ring-[#2B7574] border-white scale-105 shadow-xl'
+                              : 'border-[#2B7574]/40 hover:border-[#2B7574] hover:scale-103'
+                          } bg-black`}
+                          title={`#${index + 1} ${item.title} (Arrastra a otra posición)`}
+                        >
+                          <img
+                            src={item.url}
+                            alt={item.title}
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-sm text-[10px] font-mono-data font-bold text-[#E2E2E0] border border-white/20">
+                            #{index + 1}
+                          </div>
+                          {item.mediaType === 'video' && (
+                            <div className="absolute bottom-1 right-1 p-1 rounded-full bg-[#2B7574] text-white">
+                              <Video className="w-2.5 h-2.5" />
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center p-1 text-center">
+                            <span className="text-[9px] font-bold text-white line-clamp-2 leading-tight">
+                              {item.title}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Category Filter for arrangement */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-[#0E2931]/80 border border-[#2B7574]/40">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-mono-data text-zinc-300 mr-1 font-semibold flex items-center gap-1">
+                        <SlidersHorizontal className="w-3 h-3 text-[#2B7574]" />
+                        <span>FILTRAR ACOMODO:</span>
+                      </span>
                       <button
-                        onClick={() => handleDeletePortfolioItem(item.id)}
-                        className="p-1.5 text-rose-400 hover:text-white rounded transition-colors"
-                        title="Eliminar obra"
+                        onClick={() => setPortfolioFilterCategory('all')}
+                        className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                          portfolioFilterCategory === 'all'
+                            ? 'bg-[#2B7574] text-white font-semibold shadow'
+                            : 'text-zinc-300 hover:bg-white/10'
+                        }`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        Todas ({portfolioItems.length})
+                      </button>
+                      {categoriesList.map((cat) => {
+                        const count = portfolioItems.filter((p) => p.category === cat.id).length;
+                        return (
+                          <button
+                            key={cat.id}
+                            onClick={() => setPortfolioFilterCategory(cat.id)}
+                            className={`px-3 py-1 text-xs rounded-lg transition-colors ${
+                              portfolioFilterCategory === cat.id
+                                ? 'bg-[#2B7574] text-white font-semibold shadow'
+                                : 'text-zinc-300 hover:bg-white/10'
+                            }`}
+                          >
+                            {cat.label} ({count})
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="text-[11px] font-mono-data text-[#E2E2E0] bg-[#2B7574]/30 px-3 py-1 rounded-lg border border-[#2B7574]/50 flex items-center gap-1.5">
+                      <GripVertical className="w-3.5 h-3.5 text-[#2B7574]" />
+                      <span>Arrastra las tarjetas o usa los selectores directos de posición</span>
+                    </div>
+                  </div>
+
+                  {/* Works grid with drag & reorder controls */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {portfolioItems
+                      .map((item, originalIndex) => ({ item, originalIndex }))
+                      .filter(({ item }) =>
+                        portfolioFilterCategory === 'all' ? true : item.category === portfolioFilterCategory
+                      )
+                      .map(({ item, originalIndex }) => {
+                        const isDragging = draggedPortfolioId === item.id;
+                        const isDragOver = dragOverPortfolioId === item.id;
+
+                        return (
+                          <div
+                            key={item.id}
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('text/plain', item.id);
+                              setDraggedPortfolioId(item.id);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              if (dragOverPortfolioId !== item.id) setDragOverPortfolioId(item.id);
+                            }}
+                            onDragLeave={() => {
+                              if (dragOverPortfolioId === item.id) setDragOverPortfolioId(null);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const srcId = e.dataTransfer.getData('text/plain') || draggedPortfolioId;
+                              if (srcId && srcId !== item.id) handleDropPortfolioItem(srcId, item.id);
+                              setDraggedPortfolioId(null);
+                              setDragOverPortfolioId(null);
+                            }}
+                            onDragEnd={() => {
+                              setDraggedPortfolioId(null);
+                              setDragOverPortfolioId(null);
+                            }}
+                            className={`p-4 rounded-2xl bg-[#0E2931] border transition-all flex flex-col justify-between gap-3.5 shadow-lg ${
+                              isDragging
+                                ? 'opacity-35 border-dashed border-[#2B7574] scale-95'
+                                : isDragOver
+                                ? 'ring-2 ring-[#2B7574] border-white scale-102 bg-[#0E2931]/90 shadow-2xl'
+                                : 'border-[#2B7574]/40 hover:border-[#2B7574]'
+                            }`}
+                          >
+                            <div className="space-y-3">
+                              {/* Position Banner, Direct Position Selector and Reorder Buttons */}
+                              <div className="flex items-center justify-between gap-2 bg-[#070e11]/80 p-2 rounded-xl border border-[#2B7574]/30">
+                                <div className="flex items-center gap-1.5">
+                                  {/* Drag Handle */}
+                                  <div
+                                    className="p-1 rounded text-zinc-400 hover:text-white cursor-grab active:cursor-grabbing hover:bg-white/10 transition-colors"
+                                    title="Arrastra para reordenar"
+                                  >
+                                    <GripVertical className="w-4 h-4 text-[#2B7574]" />
+                                  </div>
+
+                                  {/* Direct Position Selector Dropdown */}
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[10px] font-mono-data text-zinc-400 font-bold">POS:</span>
+                                    <select
+                                      value={originalIndex + 1}
+                                      onChange={(e) =>
+                                        handleSetPortfolioItemPosition(item.id, Number(e.target.value))
+                                      }
+                                      className="px-2 py-0.5 rounded-lg bg-[#0E2931] border border-[#2B7574] text-xs font-mono-data font-bold text-[#E2E2E0] focus:outline-none focus:ring-1 focus:ring-[#2B7574] cursor-pointer"
+                                      title="Cambiar a esta posición directamente"
+                                    >
+                                      {portfolioItems.map((_, idx) => (
+                                        <option key={idx + 1} value={idx + 1}>
+                                          #{idx + 1} de {portfolioItems.length}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Movement Arrow Buttons */}
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePortfolioItem(item.id, 'top')}
+                                    disabled={originalIndex === 0}
+                                    className="p-1.5 rounded-lg bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 disabled:hover:bg-[#0E2931] text-[#E2E2E0] transition-colors border border-white/10"
+                                    title="Mover al primer lugar (inicio)"
+                                  >
+                                    <ChevronsUp className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePortfolioItem(item.id, 'up')}
+                                    disabled={originalIndex === 0}
+                                    className="p-1.5 rounded-lg bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 disabled:hover:bg-[#0E2931] text-[#E2E2E0] transition-colors border border-white/10"
+                                    title="Subir una posición"
+                                  >
+                                    <ArrowUp className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePortfolioItem(item.id, 'down')}
+                                    disabled={originalIndex === portfolioItems.length - 1}
+                                    className="p-1.5 rounded-lg bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 disabled:hover:bg-[#0E2931] text-[#E2E2E0] transition-colors border border-white/10"
+                                    title="Bajar una posición"
+                                  >
+                                    <ArrowDown className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePortfolioItem(item.id, 'bottom')}
+                                    disabled={originalIndex === portfolioItems.length - 1}
+                                    className="p-1.5 rounded-lg bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 disabled:hover:bg-[#0E2931] text-[#E2E2E0] transition-colors border border-white/10"
+                                    title="Mover al último lugar (final)"
+                                  >
+                                    <ChevronsDown className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Media thumbnail */}
+                              <div className="relative aspect-video rounded-xl overflow-hidden bg-black group border border-white/10 shadow-inner">
+                                <img
+                                  src={item.url}
+                                  alt={item.title}
+                                  className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                                />
+                                <div className="absolute top-2 left-2 flex items-center gap-1.5">
+                                  <span className="text-[10px] font-mono-data bg-black/85 px-2 py-0.5 rounded text-white border border-white/20 font-semibold">
+                                    {item.aspectRatio} · {item.mediaType.toUpperCase()}
+                                  </span>
+                                </div>
+                                {item.mediaType === 'video' && (
+                                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                    <div className="p-3 rounded-full bg-[#2B7574]/90 text-white shadow-lg">
+                                      <Video className="w-5 h-5" />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div>
+                                <h4 className="text-xs font-bold text-white truncate">{item.title}</h4>
+                                <p className="text-[11px] font-mono-data text-zinc-300 mt-0.5">
+                                  Categoría: <strong className="text-[#2B7574]">{categoriesList.find((c) => c.id === item.category)?.label || item.category}</strong> · {item.year}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-[#2B7574]/30">
+                              {/* Fast Replace Button */}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleOpenPhotoSwitcher({
+                                    id: `port_${item.id}`,
+                                    title: item.title,
+                                    currentUrl: item.url,
+                                    sectionName: `Obra #${originalIndex + 1} (${item.title})`,
+                                    mediaType: item.mediaType,
+                                  })
+                                }
+                                className="px-3 py-1.5 text-[11px] font-semibold text-[#E2E2E0] bg-[#2B7574]/50 hover:bg-[#2B7574] border border-[#2B7574]/70 rounded-lg transition-colors flex items-center gap-1.5"
+                                title="Cambiar la foto o video de esta obra inmediatamente"
+                              >
+                                <ImageIcon className="w-3.5 h-3.5 text-[#2B7574] group-hover:text-white" />
+                                <span>Cambiar Foto/Video</span>
+                              </button>
+
+                              <div className="flex items-center gap-1.5">
+                                {/* isFeatured toggle button */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleTogglePortfolioFeatured(item.id)}
+                                  className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-colors flex items-center gap-1 border ${
+                                    item.isFeatured !== false
+                                      ? 'bg-blue-950/60 text-blue-300 border-blue-500/40 hover:bg-blue-900/60'
+                                      : 'bg-rose-950/60 text-rose-300 border-rose-500/40 hover:bg-rose-900/60'
+                                  }`}
+                                  title={
+                                    item.isFeatured !== false
+                                      ? 'Obra pública en web. Clic para ocultarla en admin.'
+                                      : 'Obra oculta en admin. Clic para publicarla en web.'
+                                  }
+                                >
+                                  {item.isFeatured !== false ? (
+                                    <>
+                                      <Eye className="w-3.5 h-3.5 text-blue-400" />
+                                      <span>Pública</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Lock className="w-3.5 h-3.5 text-rose-400" />
+                                      <span>Oculta</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                <button
+                                  onClick={() => {
+                                    setEditingPortfolioItem(item);
+                                    setPortfolioForm({
+                                      title: item.title,
+                                      category: item.category as any,
+                                      aspectRatio: item.aspectRatio,
+                                      mediaType: item.mediaType,
+                                      url: item.url,
+                                      videoSrc: item.videoSrc || '',
+                                      client: item.client || '',
+                                      year: item.year || '2026',
+                                      camera: item.exif?.camera || 'Leica SL2-S',
+                                      lens: item.exif?.lens || 'Noctilux 50mm f/0.95',
+                                      aperture: item.exif?.aperture || 'f/1.4',
+                                      shutter: item.exif?.shutter || '1/250s',
+                                      iso: item.exif?.iso || '100',
+                                      resolution: item.exif?.resolution || '8368 × 4707 px',
+                                      description: item.description || '',
+                                      isFeatured: item.isFeatured !== false,
+                                    });
+                                    setPortfolioFileUploadPreview(item.url);
+                                    setShowAddPortfolioModal(true);
+                                  }}
+                                  className="p-1.5 text-zinc-300 hover:text-white bg-[#070e11] border border-zinc-700 rounded-lg transition-colors"
+                                  title="Editar título, categoría o detalles técnicos"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  onClick={() => handleDeletePortfolioItem(item.id)}
+                                  className="p-1.5 text-rose-400 hover:text-white bg-rose-950/40 border border-rose-900/50 rounded-lg transition-colors"
+                                  title="Eliminar obra del portafolio"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* VIEW 2: ALL WEBSITE PHOTOS MANAGER */}
+              {portfolioSubTab === 'website_photos' && (
+                <div className="space-y-6">
+                  <div className="p-4 rounded-xl bg-[#0E2931]/60 border border-[#2B7574]/40 flex items-center justify-between">
+                    <div>
+                      <h4 className="font-semibold text-white text-xs">
+                        Gestor Visual de Imágenes Clave de la Web
+                      </h4>
+                      <p className="text-[11px] text-zinc-300 mt-0.5">
+                        Cambia a tu antojo cualquier foto principal de la portada, categorías, cine o promociones. Los cambios se reflejan inmediatamente en toda la página.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* 1. Hero Principal */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Portada de Inicio
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Fotografía Hero Principal</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={studioForm.heroImage || '/src/assets/images/hero_photographer_cinematic_1790312865168.jpg'}
+                            alt="Hero principal"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          La imagen destacada junto al título principal y biografía en la cabecera.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'hero',
+                            title: 'Fotografía Hero Principal',
+                            currentUrl: studioForm.heroImage || '/src/assets/images/hero_photographer_cinematic_1790312865168.jpg',
+                            sectionName: 'Hero Header Principal',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Hero</span>
+                      </button>
+                    </div>
+
+                    {/* 2. Pilar Bodas */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Pilar 01
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Portada: Bodas</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={categoriesList.find((c) => c.id === 'bodas')?.coverImage || '/src/assets/images/hero_photographer_cinematic_1790312865168.jpg'}
+                            alt="Portada Bodas"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Tarjeta en sección especialidades y portada en portafolio completo.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cat_bodas',
+                            title: 'Portada de Bodas',
+                            currentUrl: categoriesList.find((c) => c.id === 'bodas')?.coverImage || '',
+                            sectionName: 'Categoría Bodas',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Bodas</span>
+                      </button>
+                    </div>
+
+                    {/* 3. Pilar Gastronomía */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Pilar 02
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Portada: Gastronomía</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={categoriesList.find((c) => c.id === 'gastronomia')?.coverImage || '/src/assets/images/gastronomy_culinary_fineart_1790315306551.jpg'}
+                            alt="Portada Gastronomía"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Especialidad culinaria para restaurantes y marcas fine art.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cat_gastronomia',
+                            title: 'Portada de Gastronomía',
+                            currentUrl: categoriesList.find((c) => c.id === 'gastronomia')?.coverImage || '',
+                            sectionName: 'Categoría Gastronomía',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Gastronomía</span>
+                      </button>
+                    </div>
+
+                    {/* 4. Pilar Arquitectura */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Pilar 03
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Portada: Arquitectura</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={categoriesList.find((c) => c.id === 'arquitectura')?.coverImage || '/src/assets/images/architecture_minimalist_fineart_1790312918165.jpg'}
+                            alt="Portada Arquitectura"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Documentación espacial y perspectiva de autor en Sinaloa.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cat_arquitectura',
+                            title: 'Portada de Arquitectura',
+                            currentUrl: categoriesList.find((c) => c.id === 'arquitectura')?.coverImage || '',
+                            sectionName: 'Categoría Arquitectura',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Arquitectura</span>
+                      </button>
+                    </div>
+
+                    {/* 5. Pilar Retrato */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Pilar 04
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Portada: Retrato</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={categoriesList.find((c) => c.id === 'retrato')?.coverImage || '/src/assets/images/portrait_editorial_highfashion_1790312877113.jpg'}
+                            alt="Portada Retrato"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Retratos de alta moda y sesiones de estudio de formato medio.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cat_retrato',
+                            title: 'Portada de Retrato',
+                            currentUrl: categoriesList.find((c) => c.id === 'retrato')?.coverImage || '',
+                            sectionName: 'Categoría Retrato',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Retrato</span>
+                      </button>
+                    </div>
+
+                    {/* 6. Video Cine 16:9 */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Sección Cine
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Video Cine Master (16:9)</h4>
+                        <div className="relative aspect-video rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={studioForm.cinemaFeatureImage || '/src/assets/images/hero_photographer_cinematic_1790312865168.jpg'}
+                            alt="Video Cine 16:9"
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <Video className="w-5 h-5 text-white/80" />
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Pieza cinematográfica principal en formato apaisado.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cinema_feature',
+                            title: 'Portada Video Cine 16:9',
+                            currentUrl: studioForm.cinemaFeatureImage || '/src/assets/images/hero_photographer_cinematic_1790312865168.jpg',
+                            sectionName: 'Sección Cine 16:9',
+                            mediaType: 'video',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Portada Cine</span>
+                      </button>
+                    </div>
+
+                    {/* 7. Reel Vertical 9:16 */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Sección Cine
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Reel Vertical (9:16)</h4>
+                        <div className="relative aspect-[9/16] max-h-[160px] mx-auto rounded-xl overflow-hidden bg-black border border-white/10">
+                          <img
+                            src={studioForm.cinemaReelImage || '/src/assets/images/fashion_reel_vertical_1790312908204.jpg'}
+                            alt="Reel vertical 9:16"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Pieza vertical para redes sociales y campañas mobile.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'cinema_reel',
+                            title: 'Portada Reel Vertical 9:16',
+                            currentUrl: studioForm.cinemaReelImage || '/src/assets/images/fashion_reel_vertical_1790312908204.jpg',
+                            sectionName: 'Sección Cine Reel 9:16',
+                            mediaType: 'video',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Reel Vertical</span>
+                      </button>
+                    </div>
+
+                    {/* 8. Oferta / Anuncio */}
+                    <div className="p-4 rounded-2xl bg-[#0E2931] border border-[#2B7574]/40 space-y-3 shadow-lg flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-mono-data font-bold px-2 py-0.5 rounded bg-[#2B7574] text-[#E2E2E0] uppercase">
+                          Panel Promocional
+                        </span>
+                        <h4 className="text-xs font-bold text-white">Banner de Oferta</h4>
+                        <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-black border border-white/10">
+                          {announcementData.imageUrl ? (
+                            <img
+                              src={announcementData.imageUrl}
+                              alt="Oferta"
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-xs text-zinc-400">
+                              Sin imagen activa
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-zinc-300">
+                          Fotografía editorial que acompaña el banner de anuncio y descuentos.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenPhotoSwitcher({
+                            id: 'announcement',
+                            title: 'Imagen de Oferta Especial',
+                            currentUrl: announcementData.imageUrl || '',
+                            sectionName: 'Banner de Oferta',
+                          })
+                        }
+                        className="w-full py-2 text-xs font-semibold text-[#E2E2E0] bg-[#2B7574] hover:bg-[#3b9493] rounded-xl transition-colors flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>Cambiar Foto Oferta</span>
                       </button>
                     </div>
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1886,6 +3490,141 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            {/* Automatic Email Notifications Control & Audit Card */}
+            <div className="p-5 rounded-2xl bg-gradient-to-r from-[#0E2931] via-[#102d35] to-[#070e11] border border-[#2B7574]/60 shadow-lg space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#2B7574]/30 pb-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-[#2B7574]/25 border border-[#2B7574]/50 text-[#7cc0be]">
+                    <MailCheck className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-white text-sm">
+                        Sistema de Notificaciones Automáticas vía Email
+                      </h3>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono-data bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Activo en Tiempo Real
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-300 mt-0.5">
+                      Cada vez que un cliente confirma una cita, el sistema despacha automáticamente el dossier a <strong className="text-white">cadcad111.3@gmail.com</strong> y la confirmación con Google Meet al cliente.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleSendTestBookingNotification('cadcad111.3@gmail.com')}
+                    disabled={isSendingTestEmail}
+                    className="px-3 py-1.5 rounded-xl bg-[#2B7574] hover:bg-[#38918f] text-white text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isSendingTestEmail ? 'Enviando...' : 'Enviar Prueba a cadcad111.3@gmail.com'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowEmailLogsDrawer(!showEmailLogsDrawer)}
+                    className="px-3 py-1.5 rounded-xl bg-[#0E2931] hover:bg-[#1a4a58] border border-[#2B7574]/50 text-zinc-200 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Inbox className="w-3.5 h-3.5 text-[#7cc0be]" />
+                    <span>Historial ({emailLogs.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {testEmailStatus && (
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-600/50 text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{testEmailStatus}</span>
+                </div>
+              )}
+
+              {/* Collapsible History Drawer */}
+              {showEmailLogsDrawer && (
+                <div className="pt-2 space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between text-xs text-zinc-400">
+                    <span className="font-mono-data uppercase font-bold text-[#7cc0be]">
+                      REGISTRO DE NOTIFICACIONES DISPARADAS ({emailLogs.length})
+                    </span>
+                    <button
+                      onClick={() => setEmailLogs(getEmailNotificationLogs())}
+                      className="hover:text-white flex items-center gap-1 text-[11px] cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Actualizar lista</span>
+                    </button>
+                  </div>
+
+                  {emailLogs.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-[#070e11] border border-[#2B7574]/30 text-center text-xs text-zinc-400">
+                      No hay registros aún. Cuando un cliente agende una reunión, los emails automáticos quedarán registrados aquí para auditoría y reenvío.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                      {emailLogs.map((log) => (
+                        <div
+                          key={log.id}
+                          className="p-3 rounded-xl bg-[#070e11] border border-[#2B7574]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-white">
+                                {log.bookingSummary?.clientName || 'Cliente'}
+                              </span>
+                              <span className="text-[10px] font-mono-data px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                Despachado
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-zinc-400 mt-0.5 font-mono-data">
+                              A: {log.recipientClient} y {log.recipientStudio} · {new Date(log.sentAt).toLocaleString('es-MX')}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {log.clientHtml && (
+                              <button
+                                onClick={() =>
+                                  setSelectedEmailForPreview({
+                                    title: 'Email Enviado al Cliente',
+                                    recipient: log.recipientClient || '',
+                                    subject: log.clientSubject,
+                                    sentAt: log.sentAt,
+                                    html: log.clientHtml!,
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-[#0E2931] hover:bg-[#1a4a58] text-[#7cc0be] text-[11px] border border-[#2B7574]/40 cursor-pointer"
+                              >
+                                Ver copia cliente
+                              </button>
+                            )}
+                            {log.studioHtml && (
+                              <button
+                                onClick={() =>
+                                  setSelectedEmailForPreview({
+                                    title: 'Email Enviado al Estudio',
+                                    recipient: log.recipientStudio || 'cadcad111.3@gmail.com',
+                                    subject: log.studioSubject,
+                                    sentAt: log.sentAt,
+                                    html: log.studioHtml!,
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-[#0E2931] hover:bg-[#1a4a58] text-zinc-300 text-[11px] border border-zinc-700 cursor-pointer"
+                              >
+                                Ver copia estudio
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {discoveryBookings.length === 0 ? (
               <div className="p-12 text-center rounded-2xl bg-[#121215] border border-zinc-800/80 space-y-3">
                 <div className="w-12 h-12 mx-auto rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
@@ -1907,10 +3646,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <div className="space-y-3">
                       {/* Top badges */}
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-mono-data px-2.5 py-0.5 rounded-full bg-blue-950 text-blue-300 border border-blue-800 font-semibold uppercase">
-                          {session.shootType}
-                        </span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full font-semibold uppercase ${
+                            session.meetingType === 'shoot_production'
+                              ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                              : 'bg-blue-950 text-blue-300 border border-blue-800'
+                          }`}>
+                            {session.meetingType === 'shoot_production' ? '🎬 Programación de Sesión' : '📅 Descubrimiento'}
+                          </span>
+                          <span className="text-[10px] font-mono-data px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-semibold uppercase">
+                            {session.shootType}
+                          </span>
+                        </div>
 
                         <span
                           className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full border font-semibold ${
@@ -1941,7 +3689,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       {/* Date & Time Slot */}
-                      <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs space-y-1">
+                      <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs space-y-1.5">
                         <div className="flex items-center justify-between">
                           <span className="text-zinc-400 font-mono-data">FECHA:</span>
                           <span className="font-semibold text-white">{session.date}</span>
@@ -1952,15 +3700,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             {session.startTime} - {session.endTime} (GMT-7 Culiacán)
                           </span>
                         </div>
+                        {session.productionType && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-400 font-mono-data">PRODUCCIÓN:</span>
+                            <span className="text-amber-300 font-medium font-mono-data text-[11px]">
+                              {session.productionType === 'photos'
+                                ? 'Solo Fotografía'
+                                : session.productionType === 'video'
+                                ? 'Solo Video'
+                                : 'Fotos & Video'}
+                            </span>
+                          </div>
+                        )}
+                        {session.location && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-zinc-400 font-mono-data">LOCACIÓN:</span>
+                            <span className="text-zinc-200 font-medium text-[11px] truncate max-w-[200px]">
+                              {session.location}
+                            </span>
+                          </div>
+                        )}
                         <div className="flex items-center justify-between">
                           <span className="text-zinc-400 font-mono-data">MODALIDAD:</span>
                           <span className="text-zinc-300 font-medium">
                             {session.format === 'google_meet'
                               ? 'Google Meet (Videollamada)'
                               : session.format === 'in_person'
-                              ? 'Presencial en CADSTUDIO'
+                              ? 'Presencial / En Locación'
                               : 'Llamada telefónica'}
                           </span>
+                        </div>
+                      </div>
+
+                      {/* Automated Email Notification Status Strip */}
+                      <div className="p-2.5 rounded-xl bg-[#0E2931]/60 border border-[#2B7574]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-1.5 text-zinc-300 font-mono-data text-[11px]">
+                          <MailCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Notificación automática enviada a cliente y a <strong className="text-white">cadcad111.3@gmail.com</strong></span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedEmailForPreview({
+                                title: `Email: ${session.clientName} (${session.meetingType === 'shoot_production' ? 'Sesión de Rodaje' : 'Descubrimiento'})`,
+                                recipient: session.clientEmail,
+                                subject: session.meetingType === 'shoot_production'
+                                  ? 'Confirmación de tu Sesión de Fotos/Video · CADSTUDIO'
+                                  : 'Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO',
+                                sentAt: session.createdAt,
+                                html: generateClientConfirmationEmailHtml(session, studioConfig),
+                              })
+                            }
+                            className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#12353f] hover:bg-[#1a4a58] text-[#7cc0be] border border-[#2B7574]/50 cursor-pointer transition-colors"
+                          >
+                            Ver Correo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleResendBookingEmail(session)}
+                            disabled={resendingBookingId === session.id}
+                            className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#2B7574]/40 hover:bg-[#2B7574] text-white border border-[#2B7574] cursor-pointer transition-colors disabled:opacity-50"
+                          >
+                            {resendingBookingId === session.id ? 'Reenviando...' : 'Reenviar'}
+                          </button>
                         </div>
                       </div>
 
@@ -2115,6 +3918,446 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* ========================================================================= */}
+            {/* RECHARTS VISUALIZATION: PORTFOLIO CATEGORIES MOST FREQUENTLY CLICKED       */}
+            {/* ========================================================================= */}
+            {(() => {
+              const categoryClicksRaw: CategoryClickStat[] = stats.categoryClicks || INITIAL_CATEGORY_CLICKS;
+              const categoryClicksData = categoryClicksRaw.map((item: CategoryClickStat) => {
+                const match = categoriesList.find(
+                  (c) =>
+                    c.id.toLowerCase() === item.categoryId.toLowerCase() ||
+                    c.label.toLowerCase() === item.categoryName.toLowerCase()
+                );
+                return {
+                  id: item.categoryId,
+                  name: match ? match.label : item.categoryName,
+                  clicks: item.clicks || 0,
+                  views: item.views || 0,
+                  percentage: item.percentage || 0,
+                  lastClickedAt: item.lastClickedAt,
+                };
+              });
+
+              const sortedCategoryClicks = [...categoryClicksData].sort((a, b) => {
+                if (chartSortOrder === 'desc') {
+                  return b.clicks - a.clicks;
+                }
+                return a.name.localeCompare(b.name);
+              });
+
+              const totalCategoryClicks = categoryClicksData.reduce((acc: number, c: { clicks: number }) => acc + c.clicks, 0);
+              const topCategory = [...categoryClicksData].sort((a, b) => b.clicks - a.clicks)[0];
+              const topCategoryPct = totalCategoryClicks > 0
+                ? ((topCategory?.clicks / totalCategoryClicks) * 100).toFixed(1)
+                : '0';
+
+              const CATEGORY_COLORS = [
+                '#2B7574', // CADSTUDIO signature teal
+                '#38bdf8', // sky blue
+                '#f59e0b', // amber gold
+                '#f43f5e', // rose crimson
+                '#a855f7', // purple violet
+                '#10b981', // emerald green
+                '#ec4899', // pink
+                '#6366f1', // indigo
+              ];
+
+              const CategoryChartTooltip = ({ active, payload }: any) => {
+                if (active && payload && payload.length) {
+                  const data = payload[0].payload;
+                  const share = totalCategoryClicks > 0
+                    ? ((data.clicks / totalCategoryClicks) * 100).toFixed(1)
+                    : '0';
+                  return (
+                    <div className="bg-[#0E2931] border border-[#2B7574]/80 p-3.5 rounded-xl shadow-2xl text-xs space-y-1.5 backdrop-blur-md">
+                      <p className="font-bold text-white flex items-center gap-2">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full ring-2 ring-white/30"
+                          style={{ backgroundColor: payload[0].color || payload[0].fill || '#2B7574' }}
+                        />
+                        <span className="text-sm">{data.name}</span>
+                      </p>
+                      <div className="pt-1 space-y-1">
+                        <div className="flex justify-between gap-6 text-zinc-300 font-mono-data text-[11px]">
+                          <span>Clics de Visitantes:</span>
+                          <span className="font-bold text-white text-xs">
+                            {data.clicks.toLocaleString('es-ES')}
+                          </span>
+                        </div>
+                        <div className="flex justify-between gap-6 text-zinc-400 font-mono-data text-[11px]">
+                          <span>Cuota de Preferencia:</span>
+                          <span className="font-bold text-emerald-400">{share}%</span>
+                        </div>
+                      </div>
+                      {data.lastClickedAt && (
+                        <p className="text-[10px] text-zinc-400 font-mono-data pt-1.5 border-t border-zinc-700/60 flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-[#2B7574]" />
+                          <span>
+                            Última interacción:{' '}
+                            {new Date(data.lastClickedAt).toLocaleTimeString('es-ES', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  );
+                }
+                return null;
+              };
+
+              return (
+                <div className="p-6 rounded-2xl bg-[#121215] border border-[#242429] space-y-6">
+                  {/* Toast notification if simulation occurred */}
+                  {simulateToast && (
+                    <div className="p-3 rounded-xl bg-[#2B7574]/20 border border-[#2B7574]/60 text-xs text-[#E2E2E0] flex items-center justify-between animate-fadeIn">
+                      <div className="flex items-center gap-2 font-mono-data">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>{simulateToast}</span>
+                      </div>
+                      <button
+                        onClick={() => setSimulateToast(null)}
+                        className="text-zinc-400 hover:text-white"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Header & Controls Bar */}
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-zinc-800 pb-5">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="p-1.5 rounded-lg bg-[#2B7574]/20 text-[#2B7574] border border-[#2B7574]/40">
+                          <BarChart2 className="w-4 h-4" />
+                        </span>
+                        <h3 className="text-base font-bold text-white">
+                          Categorías de Portafolio Más Clickeadas por Visitantes (Recharts)
+                        </h3>
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-1 max-w-2xl leading-relaxed">
+                        Visualización interactiva que mide qué géneros fotográficos atraen más atención directa y clics de navegación en el portafolio público de CADSTUDIO.
+                      </p>
+                    </div>
+
+                    {/* View Controls & Action Toggles */}
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      {/* Bar vs Pie Toggle */}
+                      <div className="flex items-center bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                        <button
+                          type="button"
+                          onClick={() => setChartViewMode('bar')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                            chartViewMode === 'bar'
+                              ? 'bg-[#2B7574] text-white shadow-sm'
+                              : 'text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <BarChart3 className="w-3.5 h-3.5" />
+                          <span>Barras</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChartViewMode('pie')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                            chartViewMode === 'pie'
+                              ? 'bg-[#2B7574] text-white shadow-sm'
+                              : 'text-zinc-400 hover:text-zinc-200'
+                          }`}
+                        >
+                          <TrendingUp className="w-3.5 h-3.5" />
+                          <span>Distribución %</span>
+                        </button>
+                      </div>
+
+                      {/* Sort Order Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => setChartSortOrder(chartSortOrder === 'desc' ? 'alpha' : 'desc')}
+                        className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-xs font-semibold text-zinc-300 border border-zinc-800 flex items-center gap-1.5 transition-colors"
+                        title={chartSortOrder === 'desc' ? 'Ordenar alfabéticamente' : 'Ordenar por clics'}
+                      >
+                        <ArrowUpDown className="w-3.5 h-3.5 text-[#2B7574]" />
+                        <span>{chartSortOrder === 'desc' ? 'Mayor a menor' : 'Alfabético'}</span>
+                      </button>
+
+                      {/* Reset Button */}
+                      <button
+                        type="button"
+                        onClick={handleResetCategoryClicks}
+                        className="px-2.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-400 hover:text-zinc-200 border border-zinc-800 transition-colors flex items-center gap-1"
+                        title="Calibrar estadísticas a valores base"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span className="hidden sm:inline">Calibrar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Summary Metric Chips */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-zinc-400 text-[11px] font-mono-data">
+                        <span>CATEGORÍA LÍDER</span>
+                        <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                      </div>
+                      <div className="mt-1.5">
+                        <span className="text-sm font-bold text-white block truncate">
+                          {topCategory?.name || 'N/A'}
+                        </span>
+                        <span className="text-[11px] font-mono-data text-emerald-400 font-semibold">
+                          {topCategory?.clicks.toLocaleString()} clics ({topCategoryPct}%)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-zinc-400 text-[11px] font-mono-data">
+                        <span>TOTAL CLICS EN WEB</span>
+                        <MousePointerClick className="w-3.5 h-3.5 text-[#2B7574]" />
+                      </div>
+                      <div className="mt-1.5">
+                        <span className="text-base font-bold font-mono-data text-white block">
+                          {totalCategoryClicks.toLocaleString()}
+                        </span>
+                        <span className="text-[11px] text-zinc-400 font-mono-data">
+                          Interacciones de usuarios
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-zinc-400 text-[11px] font-mono-data">
+                        <span>GÉNEROS ACTIVOS</span>
+                        <Layers className="w-3.5 h-3.5 text-blue-400" />
+                      </div>
+                      <div className="mt-1.5">
+                        <span className="text-base font-bold font-mono-data text-white block">
+                          {categoryClicksData.length}
+                        </span>
+                        <span className="text-[11px] text-zinc-400 font-mono-data">
+                          Categorías monitoreadas
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-zinc-900/60 border border-zinc-800 flex flex-col justify-between">
+                      <div className="flex items-center justify-between text-zinc-400 text-[11px] font-mono-data">
+                        <span>PROMEDIO POR GÉNERO</span>
+                        <TrendingUp className="w-3.5 h-3.5 text-rose-400" />
+                      </div>
+                      <div className="mt-1.5">
+                        <span className="text-base font-bold font-mono-data text-white block">
+                          {categoryClicksData.length > 0
+                            ? Math.round(totalCategoryClicks / categoryClicksData.length).toLocaleString()
+                            : 0}
+                        </span>
+                        <span className="text-[11px] text-zinc-400 font-mono-data">
+                          Clics por categoría
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recharts Container */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/70 border border-zinc-800/80">
+                    <div className="flex items-center justify-between text-xs text-zinc-400 mb-2 font-mono-data">
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span>MÉTRICA ACTIVA: CLICS REALES DE VISITANTES</span>
+                      </span>
+                      <span>Renderizado con Recharts ResponsiveContainer</span>
+                    </div>
+
+                    <div className="w-full h-80 sm:h-96">
+                      <ResponsiveContainer width="100%" height="100%">
+                        {chartViewMode === 'bar' ? (
+                          <BarChart
+                            data={sortedCategoryClicks}
+                            margin={{ top: 20, right: 20, left: 10, bottom: 45 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                            <XAxis
+                              dataKey="name"
+                              stroke="#71717a"
+                              fontSize={11}
+                              interval={0}
+                              angle={-15}
+                              textAnchor="end"
+                              tick={{ fill: '#d4d4d8' }}
+                            />
+                            <YAxis
+                              stroke="#71717a"
+                              fontSize={11}
+                              tick={{ fill: '#a1a1aa' }}
+                              tickFormatter={(v) => v.toLocaleString()}
+                            />
+                            <RechartsTooltip
+                              content={<CategoryChartTooltip />}
+                              cursor={{ fill: 'rgba(43, 117, 116, 0.12)' }}
+                            />
+                            <Bar
+                              dataKey="clicks"
+                              name="Clics"
+                              radius={[6, 6, 0, 0]}
+                              animationDuration={750}
+                            >
+                              {sortedCategoryClicks.map((entry, idx) => (
+                                <Cell
+                                  key={`cell-${entry.id || idx}`}
+                                  fill={CATEGORY_COLORS[idx % CATEGORY_COLORS.length]}
+                                />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        ) : (
+                          <PieChart>
+                            <RechartsTooltip content={<CategoryChartTooltip />} />
+                            <Pie
+                              data={sortedCategoryClicks}
+                              dataKey="clicks"
+                              nameKey="name"
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={65}
+                              outerRadius={120}
+                              paddingAngle={4}
+                              animationDuration={750}
+                              label={({ name, percent }: { name?: string | number; percent?: number }) =>
+                                `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
+                              }
+                            >
+                              {sortedCategoryClicks.map((entry, idx) => (
+                                <Cell
+                                  key={`pie-cell-${entry.id || idx}`}
+                                  fill={CATEGORY_COLORS[idx % CATEGORY_COLORS.length]}
+                                />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                        )}
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  {/* Simulator & Detailed Ranking Breakdown */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+                    {/* Simulator Card */}
+                    <div className="lg:col-span-4 p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 space-y-4 flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <MousePointerClick className="w-4 h-4 text-[#2B7574]" />
+                          <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono-data">
+                            Simulador de Clics de Visitante
+                          </h4>
+                        </div>
+                        <p className="text-xs text-zinc-400 leading-relaxed font-light">
+                          Selecciona cualquier categoría para simular la visita de un usuario en el portafolio público. Podrás ver la animación de Recharts y el conteo en tiempo real.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3 pt-2">
+                        <label className="block text-[11px] font-mono-data text-zinc-400">
+                          Seleccionar Categoría para probar:
+                        </label>
+                        <select
+                          value={simulatedCategory}
+                          onChange={(e) => setSimulatedCategory(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-700 rounded-xl text-white focus:outline-none focus:border-[#2B7574]"
+                        >
+                          {categoriesList.map((cat) => (
+                            <option key={cat.id} value={cat.id}>
+                              {cat.label} ({categoryClicksData.find((c: { id: string; clicks: number }) => c.id === cat.id)?.clicks || 0} clics)
+                            </option>
+                          ))}
+                        </select>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSimulateCategoryClick(simulatedCategory)}
+                          className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-[#2B7574] hover:bg-[#3b9493] text-white transition-colors flex items-center justify-center gap-2 shadow-md shadow-[#2B7574]/20"
+                        >
+                          <MousePointerClick className="w-4 h-4" />
+                          <span>Simular Clic de Visitante (+1)</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Ranking Table */}
+                    <div className="lg:col-span-8 p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono-data">
+                          Desglose de Preferencia por Género Visual
+                        </h4>
+                        <span className="text-[11px] font-mono-data text-zinc-500">
+                          {categoryClicksData.length} categorías
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 pt-1">
+                        {sortedCategoryClicks.map((item, index) => {
+                          const pct = totalCategoryClicks > 0
+                            ? Math.round((item.clicks / totalCategoryClicks) * 100)
+                            : 0;
+                          const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length];
+
+                          return (
+                            <div
+                              key={item.id}
+                              className="p-3 rounded-xl bg-zinc-950/60 border border-zinc-800/80 hover:border-zinc-700 transition-colors flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <span className={`w-6 h-6 rounded-lg flex items-center justify-center font-mono-data font-bold text-[11px] shrink-0 ${
+                                  index === 0
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : index === 1
+                                    ? 'bg-zinc-700/30 text-zinc-300 border border-zinc-600/40'
+                                    : index === 2
+                                    ? 'bg-orange-900/30 text-orange-300 border border-orange-700/40'
+                                    : 'bg-zinc-900 text-zinc-500'
+                                }`}>
+                                  #{index + 1}
+                                </span>
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-semibold text-white truncate">
+                                      {item.name}
+                                    </span>
+                                    <span className="font-mono-data text-[11px] text-zinc-400">
+                                      <strong className="text-white font-bold">{item.clicks.toLocaleString()}</strong> clics ({pct}%)
+                                    </span>
+                                  </div>
+
+                                  <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+                                    <div
+                                      style={{ width: `${pct}%`, backgroundColor: color }}
+                                      className="h-full rounded-full transition-all duration-500"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSimulateCategoryClick(item.id)}
+                                className="px-2.5 py-1 text-[11px] font-mono-data font-semibold text-[#2B7574] hover:text-white bg-[#2B7574]/15 hover:bg-[#2B7574] rounded-lg transition-colors border border-[#2B7574]/30 shrink-0"
+                                title="Sumar clic de prueba"
+                              >
+                                +1 Clic
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Export Actions Banner */}
             <div className="p-6 rounded-2xl bg-[#141418] border border-zinc-700/60 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -2870,15 +5113,104 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSavePortfolioItem} className="space-y-3 text-xs">
+            <form onSubmit={handleSavePortfolioItem} className="space-y-4 text-xs">
+              {/* Media File Upload or URL with Live Preview */}
+              <div className="space-y-2">
+                <label className="block font-mono-data text-zinc-300 font-semibold">
+                  ARCHIVO FOTOGRÁFICO O VIDEO *
+                </label>
+
+                {/* Dropzone / File Picker */}
+                <div className="p-4 rounded-xl border-2 border-dashed border-[#2B7574]/60 bg-[#070e11] hover:border-[#2B7574] transition-colors text-center">
+                  <label className="cursor-pointer block space-y-2">
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const isVid = file.type.startsWith('video/');
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const dataUrl = ev.target?.result as string;
+                          if (dataUrl) {
+                            setPortfolioFileUploadPreview(dataUrl);
+                            setPortfolioForm((prev) => ({
+                              ...prev,
+                              url: dataUrl,
+                              videoSrc: isVid ? dataUrl : prev.videoSrc,
+                              mediaType: isVid ? 'video' : 'image',
+                              title: prev.title || file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+                            }));
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                      className="hidden"
+                    />
+                    <div className="w-10 h-10 mx-auto rounded-full bg-[#2B7574]/20 border border-[#2B7574]/50 flex items-center justify-center text-[#2B7574]">
+                      <Upload className="w-5 h-5 text-[#E2E2E0]" />
+                    </div>
+                    <div>
+                      <span className="font-semibold text-[#E2E2E0] block text-xs">
+                        Haga clic para subir Foto o Video desde su dispositivo
+                      </span>
+                      <span className="text-[10px] text-zinc-400 block font-mono-data">
+                        Formatos soportados: JPG, PNG, WEBP, RAW, MP4, MOV, WEBM
+                      </span>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Direct URL input alternative */}
+                <div className="pt-1">
+                  <label className="block text-[11px] font-mono-data text-zinc-400 mb-1">
+                    O INGRESE LA URL DIRECTA DE LA FOTO / VIDEO:
+                  </label>
+                  <input
+                    type="text"
+                    value={portfolioForm.url}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setPortfolioForm({ ...portfolioForm, url: val });
+                      setPortfolioFileUploadPreview(val);
+                    }}
+                    placeholder="https://... o /src/assets/..."
+                    className="w-full px-3 py-2 rounded-lg bg-[#070e11] border border-zinc-700 text-white font-mono-data text-xs focus:outline-none focus:border-[#2B7574]"
+                  />
+                </div>
+
+                {/* Media Live Preview */}
+                {(portfolioFileUploadPreview || portfolioForm.url) && (
+                  <div className="relative aspect-video rounded-xl overflow-hidden bg-black border border-[#2B7574]/50 max-h-48 mx-auto mt-2">
+                    {portfolioForm.mediaType === 'video' ? (
+                      <video
+                        src={portfolioForm.videoSrc || portfolioForm.url}
+                        controls
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <img
+                        src={portfolioFileUploadPreview || portfolioForm.url}
+                        alt="Vista previa"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+                    <span className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/80 text-[10px] font-mono-data text-[#E2E2E0] border border-white/20">
+                      Vista Previa Activa
+                    </span>
+                  </div>
+                )}
+              </div>
+
               <div>
-                <label className="block font-mono-data text-zinc-400 mb-1">TÍTULO DE LA OBRA</label>
+                <label className="block font-mono-data text-zinc-400 mb-1">TÍTULO DE LA OBRA *</label>
                 <input
                   type="text"
                   value={portfolioForm.title}
                   onChange={(e) => setPortfolioForm({ ...portfolioForm, title: e.target.value })}
                   placeholder="ej. Silueta en Chiaroscuro"
-                  className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                  className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   required
                 />
               </div>
@@ -2889,7 +5221,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={portfolioForm.category}
                     onChange={(e) => setPortfolioForm({ ...portfolioForm, category: e.target.value as any })}
-                    className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   >
                     {categoriesList.map((cat) => (
                       <option key={cat.id} value={cat.id}>
@@ -2904,13 +5236,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={portfolioForm.aspectRatio}
                     onChange={(e) => setPortfolioForm({ ...portfolioForm, aspectRatio: e.target.value as AspectRatio })}
-                    className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   >
-                    <option value="3:4">3:4 (Retrato)</option>
-                    <option value="16:9">16:9 (Panorámico)</option>
-                    <option value="9:16">9:16 (Vertical)</option>
+                    <option value="16:9">16:9 (Panorámico / Cine)</option>
+                    <option value="9:16">9:16 (Vertical Reel / Story)</option>
+                    <option value="3:4">3:4 (Retrato Clásico)</option>
+                    <option value="4:3">4:3 (Editorial)</option>
                     <option value="1:1">1:1 (Cuadrado)</option>
-                    <option value="4:3">4:3 (Clásico)</option>
                   </select>
                 </div>
               </div>
@@ -2921,33 +5253,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <select
                     value={portfolioForm.mediaType}
                     onChange={(e) => setPortfolioForm({ ...portfolioForm, mediaType: e.target.value as MediaType })}
-                    className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   >
-                    <option value="image">Fotografía de Alta Resolución</option>
-                    <option value="video">Video de Alta Resolución</option>
+                    <option value="image">Fotografía (Imagen)</option>
+                    <option value="video">Video (Audiovisual)</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">AÑO</label>
+                  <label className="block font-mono-data text-zinc-400 mb-1">AÑO DE PRODUCCIÓN</label>
                   <input
                     type="text"
                     value={portfolioForm.year}
                     onChange={(e) => setPortfolioForm({ ...portfolioForm, year: e.target.value })}
-                    className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   />
                 </div>
               </div>
 
               {portfolioForm.mediaType === 'video' && (
                 <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">URL DEL VIDEO (.MP4)</label>
+                  <label className="block font-mono-data text-zinc-400 mb-1">URL DEL ARCHIVO DE VIDEO (.MP4 / WEBM)</label>
                   <input
                     type="text"
                     value={portfolioForm.videoSrc}
                     onChange={(e) => setPortfolioForm({ ...portfolioForm, videoSrc: e.target.value })}
-                    placeholder="https://.../video.mp4"
-                    className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    placeholder="https://... o video en base64"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                   />
                 </div>
               )}
@@ -2958,9 +5290,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={portfolioForm.camera}
                   onChange={(e) => setPortfolioForm({ ...portfolioForm, camera: e.target.value })}
-                  placeholder="ej. Leica SL2-S o Hasselblad"
-                  className="w-full p-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                  placeholder="ej. Leica SL2-S · Hasselblad H6D · Sony FX6"
+                  className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
                 />
+              </div>
+
+              {/* isFeatured Boolean Selector */}
+              <div className="p-3.5 rounded-xl bg-[#070e11] border border-[#2B7574]/40 space-y-2">
+                <span className="text-[11px] font-mono-data text-zinc-300 font-bold block">
+                  VISIBILIDAD EN EL PORTAFOLIO PÚBLICO (isFeatured):
+                </span>
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={portfolioForm.isFeatured !== false}
+                    onChange={(e) => setPortfolioForm({ ...portfolioForm, isFeatured: e.target.checked })}
+                    className="w-4 h-4 mt-0.5 text-[#2B7574] rounded focus:ring-0 focus:ring-offset-0 bg-zinc-900 border-zinc-700 cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="text-white font-semibold block">
+                      {portfolioForm.isFeatured !== false
+                        ? '🌐 Visible en Portafolio Público (isFeatured: true)'
+                        : '🔒 Oculto en Panel de Administrador (isFeatured: false)'}
+                    </span>
+                    <span className="text-[11px] text-zinc-400 block mt-0.5">
+                      {portfolioForm.isFeatured !== false
+                        ? 'Esta obra se proyectará en la web pública para los clientes y visitantes.'
+                        : 'Esta obra permanecerá oculta y solo será visible para ti dentro del panel de control.'}
+                    </span>
+                  </div>
+                </label>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800">
@@ -2973,12 +5332,144 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-xl"
+                  className="px-5 py-2.5 bg-[#2B7574] hover:bg-[#3b9493] text-[#E2E2E0] font-semibold rounded-xl transition-colors shadow-lg"
                 >
-                  Añadir Obra
+                  {editingPortfolioItem ? 'Guardar Cambios' : 'Añadir al Portafolio'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Quick Photo Switcher for ANY Website Photo or Work */}
+      {showPhotoSwitcherModal && photoSwitcherTarget && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0E2931] border border-[#2B7574] rounded-2xl max-w-lg w-full p-6 space-y-5 animate-in zoom-in-95 duration-200 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2B7574]/40">
+              <div>
+                <span className="text-[10px] font-mono-data uppercase text-[#2B7574] font-bold block">
+                  {photoSwitcherTarget.sectionName}
+                </span>
+                <h3 className="font-display text-lg font-bold text-[#E2E2E0] flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-[#2B7574]" />
+                  <span>Cambiar Imagen: {photoSwitcherTarget.title}</span>
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPhotoSwitcherModal(false);
+                  setPhotoSwitcherTarget(null);
+                  setPhotoSwitcherNewUrl('');
+                }}
+                className="text-zinc-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Option A: Upload local file */}
+              <div>
+                <label className="block font-mono-data text-zinc-300 font-semibold mb-1.5">
+                  1. SELECCIONAR ARCHIVO DESDE TU DISPOSITIVO:
+                </label>
+                <div className="p-4 rounded-xl border-2 border-dashed border-[#2B7574]/60 bg-[#070e11] hover:border-[#2B7574] transition-colors text-center">
+                  <label className="cursor-pointer block space-y-1.5">
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      onChange={handlePhotoSwitcherFileSelected}
+                      className="hidden"
+                    />
+                    <Upload className="w-6 h-6 mx-auto text-[#2B7574]" />
+                    <span className="text-xs font-semibold text-[#E2E2E0] block">
+                      {isUploadingSwitcherFile ? 'Procesando archivo...' : 'Haz clic para seleccionar nueva foto o video'}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 block font-mono-data">
+                      Reemplazo instantáneo de la imagen en la web
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Option B: Enter URL */}
+              <div>
+                <label className="block font-mono-data text-zinc-300 font-semibold mb-1">
+                  2. O PEGAR ENLACE / URL DE LA IMAGEN:
+                </label>
+                <input
+                  type="text"
+                  value={photoSwitcherNewUrl}
+                  onChange={(e) => setPhotoSwitcherNewUrl(e.target.value)}
+                  placeholder="https://... o /src/assets/..."
+                  className="w-full px-3.5 py-2.5 rounded-lg bg-[#070e11] border border-[#2B7574]/50 text-white font-mono-data text-xs focus:outline-none focus:border-[#2B7574]"
+                />
+              </div>
+
+              {/* Side by side Preview */}
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <span className="block text-[10px] font-mono-data text-zinc-400 mb-1">FOTO ACTUAL:</span>
+                  <div className="aspect-video rounded-lg overflow-hidden bg-black border border-zinc-700">
+                    <img
+                      src={photoSwitcherTarget.currentUrl}
+                      alt="Actual"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <span className="block text-[10px] font-mono-data text-emerald-400 mb-1 font-bold">NUEVA FOTO:</span>
+                  <div className="aspect-video rounded-lg overflow-hidden bg-black border border-[#2B7574]">
+                    {photoSwitcherNewUrl ? (
+                      photoSwitcherMediaType === 'video' ? (
+                        <video
+                          src={photoSwitcherNewUrl}
+                          className="w-full h-full object-cover"
+                          controls
+                        />
+                      ) : (
+                        <img
+                          src={photoSwitcherNewUrl}
+                          alt="Nueva"
+                          className="w-full h-full object-cover"
+                        />
+                      )
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-zinc-500 text-[11px] p-2 text-center">
+                        Selecciona o pega una imagen
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2B7574]/40">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPhotoSwitcherModal(false);
+                    setPhotoSwitcherTarget(null);
+                    setPhotoSwitcherNewUrl('');
+                  }}
+                  className="px-4 py-2 text-zinc-400 hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePhotoSwitch}
+                  disabled={!photoSwitcherNewUrl.trim()}
+                  className="px-5 py-2.5 bg-[#2B7574] hover:bg-[#3b9493] disabled:opacity-40 text-[#E2E2E0] font-semibold rounded-xl transition-colors shadow-lg flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Aplicar Cambio a Toda la Web</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -3036,7 +5527,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
-                <label className="block font-mono-data text-zinc-400 mb-1">IMAGEN DE PORTADA (URL)</label>
+                <label className="block font-mono-data text-zinc-400 mb-1">IMAGEN DE PORTADA DE LA CATEGORÍA</label>
+                <div className="flex gap-2 items-center mb-1.5">
+                  <label className="cursor-pointer px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[#E2E2E0] text-xs flex items-center gap-1.5 transition-colors">
+                    <Upload className="w-3.5 h-3.5 text-[#2B7574]" />
+                    <span>Subir archivo local</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const dataUrl = ev.target?.result as string;
+                          if (dataUrl) setCategoryForm((prev) => ({ ...prev, coverImage: dataUrl }));
+                        };
+                        reader.readAsDataURL(file);
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                  <span className="text-[10px] text-zinc-400 font-mono-data">o escribe la URL debajo:</span>
+                </div>
                 <input
                   type="text"
                   value={categoryForm.coverImage}
@@ -3044,6 +5557,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   placeholder="https://... o /src/assets/..."
                   className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
                 />
+                {categoryForm.coverImage && (
+                  <div className="mt-2 aspect-video max-h-24 rounded-lg overflow-hidden border border-zinc-700 bg-black">
+                    <img src={categoryForm.coverImage} alt="Preview" className="w-full h-full object-cover" />
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800">
@@ -3212,9 +5730,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 FOTOS ACTUALES EN ESTA GALERÍA ({uploadTargetGallery.files.length})
               </span>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto p-1">
-                {uploadTargetGallery.files.map((f) => (
+                {uploadTargetGallery.files.map((f, idx) => (
                   <div key={f.id} className="relative group rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800">
                     <img src={f.previewUrl} alt={f.title} className="w-full h-20 object-cover" />
+                    <div className="absolute top-1 left-1 flex items-center gap-0.5 opacity-90 group-hover:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (idx === 0) return;
+                          const newFiles = [...uploadTargetGallery.files];
+                          const temp = newFiles[idx];
+                          newFiles[idx] = newFiles[idx - 1];
+                          newFiles[idx - 1] = temp;
+                          reorderClientGalleryFiles(uploadTargetGallery.id, newFiles.map((fl) => fl.id));
+                          setGalleries(getClientGalleries());
+                          setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+                        }}
+                        disabled={idx === 0}
+                        className="p-1 rounded bg-black/80 hover:bg-[#2B7574] disabled:opacity-20 text-white"
+                        title="Mover foto antes"
+                      >
+                        <ArrowUp className="w-2.5 h-2.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (idx === uploadTargetGallery.files.length - 1) return;
+                          const newFiles = [...uploadTargetGallery.files];
+                          const temp = newFiles[idx];
+                          newFiles[idx] = newFiles[idx + 1];
+                          newFiles[idx + 1] = temp;
+                          reorderClientGalleryFiles(uploadTargetGallery.id, newFiles.map((fl) => fl.id));
+                          setGalleries(getClientGalleries());
+                          setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+                        }}
+                        disabled={idx === uploadTargetGallery.files.length - 1}
+                        className="p-1 rounded bg-black/80 hover:bg-[#2B7574] disabled:opacity-20 text-white"
+                        title="Mover foto después"
+                      >
+                        <ArrowDown className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
                     <button
                       type="button"
                       onClick={() => handleDeletePhotoFromGallery(f.id)}
@@ -3224,7 +5780,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <Trash2 className="w-3 h-3" />
                     </button>
                     <div className="p-1.5 text-[10px] font-mono-data text-zinc-300 truncate">
-                      {f.title}
+                      #{idx + 1} {f.title}
                     </div>
                   </div>
                 ))}
@@ -3302,14 +5858,338 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {/* MODAL: MESA DE LUZ & ACOMODO VISUAL GRÁFICO DE GALERÍA PRIVADA */}
+      {visualReorderGallery && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5">
+          <div className="bg-[#0E2931] border border-[#2B7574] rounded-2xl max-w-5xl w-full p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-[#2B7574]/40 gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <LayoutGrid className="w-5 h-5 text-[#2B7574]" />
+                  <h3 className="font-display text-lg font-bold text-[#E2E2E0]">
+                    Mesa de Luz y Acomodo Visual: {visualReorderGallery.clientName}
+                  </h3>
+                </div>
+                <p className="text-xs text-zinc-300 mt-0.5">
+                  Organice el orden de visualización de las {visualReorderGallery.files.length} fotografías de esta entrega privada. Arrastre cualquier tarjeta o use los controles rápidos.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onOpenClientPortalWithToken(visualReorderGallery.token)}
+                  className="px-3 py-1.5 text-xs text-rose-300 bg-rose-950/60 hover:bg-rose-900/70 border border-rose-800/60 rounded-xl transition-colors flex items-center gap-1.5"
+                  title="Ver cómo ve el cliente esta sala"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Ver Portal del Cliente</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisualReorderGallery(null)}
+                  className="px-4 py-1.5 bg-[#2B7574] hover:bg-[#3b9493] text-[#E2E2E0] font-semibold text-xs rounded-xl transition-colors shadow"
+                >
+                  Listo / Cerrar
+                </button>
+              </div>
+            </div>
+
+            {/* Instruction strip */}
+            <div className="p-3 rounded-xl bg-[#070e11] border border-[#2B7574]/30 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 text-[#E2E2E0]">
+                <GripVertical className="w-4 h-4 text-[#2B7574]" />
+                <span className="font-mono-data text-[11px]">
+                  <strong>Arrastrar & Soltar:</strong> Mueva cualquier foto sobre otra para intercambiar su lugar.
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-zinc-300 text-[11px] font-mono-data">
+                <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                <span>Usa la estrella para definir la foto de portada de la galería</span>
+              </div>
+            </div>
+
+            {/* Panoramic Filmstrip Ribbon for this client */}
+            {visualReorderGallery.files.length > 0 && (
+              <div className="p-2.5 rounded-xl bg-[#070e11]/80 border border-[#2B7574]/30 space-y-1.5">
+                <span className="text-[10px] font-mono-data text-zinc-400 font-bold block">
+                  SECUENCIA EN MINIATURA ({visualReorderGallery.files.length} fotos):
+                </span>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-[#2B7574]">
+                  {visualReorderGallery.files.map((file, idx) => (
+                    <div
+                      key={`gallery-strip-${file.id}`}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', file.id);
+                        setDraggedGalleryFileId(file.id);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (dragOverGalleryFileId !== file.id) setDragOverGalleryFileId(file.id);
+                      }}
+                      onDragLeave={() => {
+                        if (dragOverGalleryFileId === file.id) setDragOverGalleryFileId(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const srcId = e.dataTransfer.getData('text/plain') || draggedGalleryFileId;
+                        if (srcId && srcId !== file.id) handleDropGalleryFile(visualReorderGallery.id, srcId, file.id);
+                        setDraggedGalleryFileId(null);
+                        setDragOverGalleryFileId(null);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedGalleryFileId(null);
+                        setDragOverGalleryFileId(null);
+                      }}
+                      className={`shrink-0 w-16 aspect-square rounded-lg overflow-hidden border cursor-grab active:cursor-grabbing relative ${
+                        draggedGalleryFileId === file.id
+                          ? 'opacity-35 border-dashed border-[#2B7574]'
+                          : dragOverGalleryFileId === file.id
+                          ? 'ring-2 ring-[#2B7574] border-white scale-105'
+                          : 'border-[#2B7574]/40 hover:border-[#2B7574]'
+                      } bg-black`}
+                      title={`#${idx + 1} ${file.title}`}
+                    >
+                      <img src={file.previewUrl} alt={file.title} className="w-full h-full object-cover" />
+                      <span className="absolute top-0.5 left-0.5 px-1 rounded bg-black/80 text-[9px] font-mono-data text-white font-bold">
+                        #{idx + 1}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Photos Contact Sheet Grid */}
+            <div className="flex-1 overflow-y-auto pr-1">
+              {visualReorderGallery.files.length === 0 ? (
+                <div className="py-16 text-center space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-full bg-[#2B7574]/20 border border-[#2B7574]/50 flex items-center justify-center text-[#2B7574]">
+                    <Upload className="w-6 h-6 text-[#E2E2E0]" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Esta galería aún no tiene fotografías cargadas</h4>
+                  <p className="text-xs text-zinc-400 max-w-sm mx-auto">
+                    Presione en &quot;Subir Fotos&quot; o conecte una carpeta de Google Drive para poblar esta entrega.
+                  </p>
+                  <button
+                    onClick={() => {
+                      const gal = visualReorderGallery;
+                      setVisualReorderGallery(null);
+                      handleOpenUploadModal(gal);
+                    }}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs rounded-xl"
+                  >
+                    Subir Fotos a esta Galería
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-1">
+                  {visualReorderGallery.files.map((file, idx) => {
+                    const isDragging = draggedGalleryFileId === file.id;
+                    const isDragOver = dragOverGalleryFileId === file.id;
+                    const isCover = visualReorderGallery.coverImage === file.previewUrl || visualReorderGallery.coverImage === file.originalUrl;
+
+                    return (
+                      <div
+                        key={file.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', file.id);
+                          setDraggedGalleryFileId(file.id);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          if (dragOverGalleryFileId !== file.id) setDragOverGalleryFileId(file.id);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverGalleryFileId === file.id) setDragOverGalleryFileId(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const srcId = e.dataTransfer.getData('text/plain') || draggedGalleryFileId;
+                          if (srcId && srcId !== file.id) handleDropGalleryFile(visualReorderGallery.id, srcId, file.id);
+                          setDraggedGalleryFileId(null);
+                          setDragOverGalleryFileId(null);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedGalleryFileId(null);
+                          setDragOverGalleryFileId(null);
+                        }}
+                        className={`p-3 rounded-xl bg-[#070e11] border transition-all flex flex-col justify-between gap-2.5 ${
+                          isDragging
+                            ? 'opacity-30 border-dashed border-[#2B7574] scale-95'
+                            : isDragOver
+                            ? 'ring-2 ring-[#2B7574] border-white scale-102 bg-[#0E2931] shadow-2xl'
+                            : isCover
+                            ? 'border-amber-400/80 shadow-md ring-1 ring-amber-400/30'
+                            : 'border-[#2B7574]/40 hover:border-[#2B7574]'
+                        }`}
+                      >
+                        <div className="space-y-2">
+                          {/* Card top toolbar: Grip, Position Jump, Arrows */}
+                          <div className="flex items-center justify-between gap-1 pb-1 border-b border-white/10">
+                            <div className="flex items-center gap-1">
+                              <div
+                                className="cursor-grab active:cursor-grabbing p-1 text-zinc-400 hover:text-white"
+                                title="Arrastrar para cambiar lugar"
+                              >
+                                <GripVertical className="w-3.5 h-3.5 text-[#2B7574]" />
+                              </div>
+                              <select
+                                value={idx + 1}
+                                onChange={(e) =>
+                                  handleSetGalleryFilePosition(
+                                    visualReorderGallery.id,
+                                    file.id,
+                                    Number(e.target.value)
+                                  )
+                                }
+                                className="px-1.5 py-0.5 rounded bg-[#0E2931] border border-[#2B7574]/60 text-[11px] font-mono-data font-bold text-[#E2E2E0] focus:outline-none"
+                                title="Saltar directamente a esta posición"
+                              >
+                                {visualReorderGallery.files.map((_, i) => (
+                                  <option key={i + 1} value={i + 1}>
+                                    #{i + 1}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Move arrow buttons */}
+                            <div className="flex items-center gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => handleMoveGalleryFile(visualReorderGallery.id, file.id, 'top')}
+                                disabled={idx === 0}
+                                className="p-1 rounded bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0]"
+                                title="Mover al inicio"
+                              >
+                                <ChevronsUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveGalleryFile(visualReorderGallery.id, file.id, 'up')}
+                                disabled={idx === 0}
+                                className="p-1 rounded bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0]"
+                                title="Subir una posición"
+                              >
+                                <ArrowUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveGalleryFile(visualReorderGallery.id, file.id, 'down')}
+                                disabled={idx === visualReorderGallery.files.length - 1}
+                                className="p-1 rounded bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0]"
+                                title="Bajar una posición"
+                              >
+                                <ArrowDown className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMoveGalleryFile(visualReorderGallery.id, file.id, 'bottom')}
+                                disabled={idx === visualReorderGallery.files.length - 1}
+                                className="p-1 rounded bg-[#0E2931] hover:bg-[#2B7574] disabled:opacity-20 text-[#E2E2E0]"
+                                title="Mover al final"
+                              >
+                                <ChevronsDown className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Image preview */}
+                          <div className="relative aspect-[4/3] rounded-lg overflow-hidden bg-black border border-white/10 group">
+                            <img
+                              src={file.previewUrl}
+                              alt={file.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                            {isCover && (
+                              <div className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded bg-amber-500/90 text-black text-[9px] font-mono-data font-bold flex items-center gap-1 shadow">
+                                <Star className="w-2.5 h-2.5 fill-black" />
+                                <span>PORTADA</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Title */}
+                          <div className="truncate text-[11px] font-semibold text-white">
+                            {file.title}
+                          </div>
+                        </div>
+
+                        {/* Card footer: Set cover and delete */}
+                        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-white/10">
+                          <button
+                            type="button"
+                            onClick={() => handleSetGalleryCoverFromFile(visualReorderGallery.id, file.previewUrl)}
+                            className={`px-2 py-1 rounded text-[10px] font-mono-data flex items-center gap-1 transition-colors ${
+                              isCover
+                                ? 'bg-amber-400 text-black font-bold'
+                                : 'bg-[#0E2931] text-zinc-300 hover:text-white hover:bg-[#2B7574]/40'
+                            }`}
+                            title="Hacer de esta foto la portada principal de la galería"
+                          >
+                            <Star className={`w-3 h-3 ${isCover ? 'fill-black' : ''}`} />
+                            <span>{isCover ? 'Es Portada' : 'Hacer Portada'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm('¿Desea eliminar esta foto de la galería?')) {
+                                const updated = removePhotoFromGallery(visualReorderGallery.id, file.id);
+                                if (updated) {
+                                  setGalleries(getClientGalleries());
+                                  setVisualReorderGallery(updated);
+                                  setSaveSuccessMsg('Foto eliminada.');
+                                  setTimeout(() => setSaveSuccessMsg(null), 2000);
+                                }
+                              }
+                            }}
+                            className="p-1 rounded text-zinc-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                            title="Eliminar foto"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Status */}
+            <div className="pt-2 border-t border-[#2B7574]/30 flex flex-wrap items-center justify-between text-xs text-zinc-300">
+              <span className="font-mono-data text-[11px]">
+                {visualReorderGallery.files.length} fotografías organizadas visualmente en tiempo real
+              </span>
+              <button
+                type="button"
+                onClick={() => setVisualReorderGallery(null)}
+                className="px-5 py-2 bg-[#2B7574] hover:bg-[#3b9493] text-[#E2E2E0] font-semibold rounded-xl transition-colors shadow"
+              >
+                Guardar y Finalizar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Google Drive Sync Modal */}
       <GoogleDriveSyncModal
         isOpen={showDriveSyncModal}
         onClose={() => setShowDriveSyncModal(false)}
         galleries={galleries}
         initialSelectedGalleryId={driveSyncGalleryId}
+        initialMode={driveSyncMode}
         onSyncComplete={() => {
           setGalleries(getClientGalleries());
+          setPortfolioItems(getPortfolioItems());
+          setCategoriesList(getStudioCategories());
+          setStudioConfigState(getStudioConfig());
           if (onRefreshData) onRefreshData();
         }}
       />

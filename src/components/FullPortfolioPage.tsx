@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { PortfolioItem, StudioCategory, AspectRatio, StudioConfig } from '../types';
-import { updateStudioCategoryPhoto } from '../services/storageService';
+import { updateStudioCategoryPhoto, trackCategoryClick } from '../services/storageService';
 import {
   ArrowLeft,
   Camera,
@@ -42,10 +42,11 @@ export const FullPortfolioPage: React.FC<FullPortfolioPageProps> = ({
   const [newCoverUrl, setNewCoverUrl] = useState<string>('');
   const [changeSuccessMsg, setChangeSuccessMsg] = useState<string | null>(null);
 
-  // Filter items based on active tab
+  // Filter items based on isFeatured (only public works appear, hidden works remain in admin)
+  const publicItems = items.filter((item) => item.isFeatured !== false);
   const filteredItems = selectedCategory === 'all'
-    ? items
-    : items.filter((item) => item.category === selectedCategory);
+    ? publicItems
+    : publicItems.filter((item) => item.category === selectedCategory);
 
   const activeCategoryObj = categories.find((c) => c.id === selectedCategory);
 
@@ -197,7 +198,10 @@ export const FullPortfolioPage: React.FC<FullPortfolioPageProps> = ({
               return (
                 <button
                   key={cat.id}
-                  onClick={() => onSelectCategory(cat.id)}
+                  onClick={() => {
+                    trackCategoryClick(cat.id, cat.label);
+                    onSelectCategory(cat.id);
+                  }}
                   className={`px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap shrink-0 flex items-center gap-2 ${
                     isSelected
                       ? 'bg-[#2B7574] text-[#E2E2E0] shadow-sm font-bold scale-[1.01]'

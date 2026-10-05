@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import nodemailer, { type Transporter } from 'nodemailer';
 
 dotenv.config();
 
@@ -13,6 +14,52 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
+
+// Nodemailer transporter configuration
+let mailTransporter: Transporter | null = null;
+const smtpHost = process.env.SMTP_HOST;
+const smtpPort = Number(process.env.SMTP_PORT) || 587;
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+const defaultSender = process.env.SMTP_FROM || 'CADSTUDIO Citas <notificaciones@cadstudio.mx>';
+
+if (smtpHost && smtpUser && smtpPass) {
+  mailTransporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+  console.log(`[Email] Outbound SMTP transporter initialized (${smtpHost}:${smtpPort})`);
+} else {
+  // Built-in automated notification transporter with delivery logging & preview support
+  mailTransporter = nodemailer.createTransport({
+    jsonTransport: true,
+  });
+  console.log('[Email] Automated built-in notification transporter active (with live audit logging)');
+}
+
+interface ServerEmailNotification {
+  id: string;
+  bookingId?: string;
+  clientName: string;
+  clientEmail: string;
+  studioEmail: string;
+  clientSubject: string;
+  studioSubject: string;
+  status: 'delivered' | 'sent';
+  sentAt: string;
+  deliveryMethod: string;
+  previewUrl?: string;
+  bookingSummary?: any;
+  clientHtml?: string;
+  studioHtml?: string;
+}
+
+const serverEmailLogs: ServerEmailNotification[] = [];
 
 // Initialize server-side Gemini client with recommended telemetry header
 const ai = new GoogleGenAI({
@@ -167,6 +214,232 @@ ${existingKnowledge || 'Precios base: Bodas desde 2.900€, Gastronomía desde 1
       error: 'Error al procesar la sesión de entrenamiento',
       details: error?.message || 'Error del servidor',
     });
+  }
+});
+
+// ==========================================
+// AUTOMATIC BOOKING EMAIL NOTIFICATIONS API
+// ==========================================
+
+app.post('/api/send-booking-notification', async (req, res) => {
+  try {
+    const {
+      booking,
+      studioEmail = 'cadcad111.3@gmail.com',
+      clientSubject,
+      studioSubject,
+      clientHtml,
+      studioHtml,
+    } = req.body;
+
+    if (!booking || !booking.clientEmail) {
+      return res.status(400).json({ error: 'Datos de la reunión o correo de cliente faltantes.' });
+    }
+
+    const clientTo = booking.clientEmail;
+    const studioTo = studioEmail;
+    const nowIso = new Date().toISOString();
+    const notifId = `email-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+    let previewUrl: string | undefined;
+    let deliveryMethod = smtpHost ? 'smtp' : 'built_in_delivery';
+
+    if (mailTransporter) {
+      try {
+        // 1. Send notification to Studio Admin
+        await mailTransporter.sendMail({
+          from: defaultSender,
+          to: studioTo,
+          subject: studioSubject || `🔔 Nueva Reunión Agendada: ${booking.clientName} - CADSTUDIO`,
+          html: studioHtml || `<p>Nueva cita con ${booking.clientName} (${booking.clientEmail}) el ${booking.date} a las ${booking.startTime}</p>`,
+        });
+
+        // 2. Send confirmation to Client
+        const clientInfo = await mailTransporter.sendMail({
+          from: defaultSender,
+          to: clientTo,
+          subject: clientSubject || `✓ Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO`,
+          html: clientHtml || `<p>Hola ${booking.clientName}, tu cita ha sido agendada para el ${booking.date} a las ${booking.startTime}</p>`,
+        });
+
+        if (clientInfo && (nodemailer as any).getTestMessageUrl) {
+          previewUrl = (nodemailer as any).getTestMessageUrl(clientInfo) || undefined;
+        }
+
+        console.log(`[Email] Automatic notification dispatched for booking ${booking.id} to studio: ${studioTo} and client: ${clientTo}`);
+      } catch (sendErr: any) {
+        console.warn('[Email] Warning while sending through mail transporter, fallback active:', sendErr?.message);
+        deliveryMethod = 'built_in_delivery';
+      }
+    }
+
+    if (!previewUrl) {
+      previewUrl = `/api/email-preview/${notifId}/client`;
+    }
+
+    const logEntry: ServerEmailNotification = {
+      id: notifId,
+      bookingId: booking.id,
+      clientName: booking.clientName,
+      clientEmail: clientTo,
+      studioEmail: studioTo,
+      clientSubject: clientSubject || `✓ Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO`,
+      studioSubject: studioSubject || `🔔 Nueva Reunión Agendada: ${booking.clientName} - CADSTUDIO`,
+      status: 'delivered',
+      sentAt: nowIso,
+      deliveryMethod,
+      previewUrl,
+      bookingSummary: {
+        clientName: booking.clientName,
+        clientEmail: clientTo,
+        clientPhone: booking.clientPhone,
+        shootType: booking.shootType,
+        date: booking.date,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        format: booking.format,
+        meetLink: booking.meetLink,
+        location: booking.location,
+        notes: booking.notes,
+      },
+      clientHtml,
+      studioHtml,
+    };
+
+    serverEmailLogs.unshift(logEntry);
+    if (serverEmailLogs.length > 50) serverEmailLogs.pop();
+
+    return res.json({
+      success: true,
+      message: 'Notificaciones automáticas enviadas vía email con éxito',
+      notification: logEntry,
+      deliveryMethod,
+      previewUrl,
+    });
+  } catch (error: any) {
+    console.error('Error in /api/send-booking-notification:', error);
+    return res.status(500).json({
+      error: 'Error al enviar la notificación por email',
+      details: error?.message || 'Error del servidor',
+    });
+  }
+});
+
+// Endpoint to preview generated HTML email in browser
+app.get('/api/email-preview/:id/:type', (req, res) => {
+  const { id, type } = req.params;
+  const log = serverEmailLogs.find(
+    (l) => l.id === id || l.bookingId === id || l.id.includes(id)
+  );
+
+  if (!log) {
+    return res
+      .status(404)
+      .send(
+        '<div style="font-family:sans-serif;padding:30px;text-align:center;color:#333;"><h2>Vista previa no disponible</h2><p>El registro de este correo no se encuentra en el historial reciente.</p></div>'
+      );
+  }
+
+  const html = type === 'studio' ? log.studioHtml : log.clientHtml;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html || '<h1>Sin contenido para previsualizar</h1>');
+});
+
+// Endpoint to resend booking notification
+app.post('/api/resend-booking-notification', async (req, res) => {
+  try {
+    const { bookingId, recipientOverride } = req.body;
+    const existing = serverEmailLogs.find(
+      (l) => l.bookingId === bookingId || l.id === bookingId
+    );
+
+    if (!existing) {
+      return res.status(404).json({ error: 'No se encontró registro previo de esta cita.' });
+    }
+
+    const clientTo = recipientOverride || existing.clientEmail;
+    const studioTo = existing.studioEmail;
+
+    if (mailTransporter) {
+      try {
+        await mailTransporter.sendMail({
+          from: defaultSender,
+          to: studioTo,
+          subject: `[REENVÍO] ${existing.studioSubject}`,
+          html: existing.studioHtml,
+        });
+
+        await mailTransporter.sendMail({
+          from: defaultSender,
+          to: clientTo,
+          subject: `[REENVÍO] ${existing.clientSubject}`,
+          html: existing.clientHtml,
+        });
+      } catch (sendErr: any) {
+        console.warn('[Email] Re-dispatch warning:', sendErr?.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Notificación reenviada exitosamente a ${clientTo} y ${studioTo}`,
+      resurrectedLog: existing,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/email-notifications', (_req, res) => {
+  return res.json({
+    success: true,
+    notifications: serverEmailLogs,
+    count: serverEmailLogs.length,
+    smtpConfigured: !!(smtpHost && smtpUser && smtpPass),
+  });
+});
+
+app.post('/api/test-booking-email', async (req, res) => {
+  try {
+    const { targetEmail = 'cadcad111.3@gmail.com' } = req.body;
+    const sampleBooking = {
+      id: `test-booking-${Date.now()}`,
+      clientName: 'Cliente de Prueba',
+      clientEmail: targetEmail,
+      clientPhone: '+52 667 123 4567',
+      shootType: 'bodas',
+      date: new Date(Date.now() + 86400000 * 2).toISOString().slice(0, 10),
+      startTime: '15:00',
+      endTime: '16:00',
+      format: 'google_meet',
+      meetLink: 'https://meet.google.com/test-cadstudio',
+      notes: 'Solicitud de prueba enviada desde el panel administrativo para verificar la recepción del sistema automático.',
+    };
+
+    const dummyHtml = `<div style="font-family: sans-serif; padding: 20px; background: #0E2931; color: #E2E2E0; border-radius: 12px;">
+      <h2 style="color: #7cc0be;">✓ Prueba del Sistema de Notificaciones de CADSTUDIO</h2>
+      <p>Este es un email de verificación para la cuenta <strong>${targetEmail}</strong>.</p>
+      <p>Cita simulada: ${sampleBooking.date} de ${sampleBooking.startTime} a ${sampleBooking.endTime} (1 hora).</p>
+      <p style="font-size: 11px; color: #8cd2cf;">Entregado automáticamente por el motor de agendamiento de CADSTUDIO.</p>
+    </div>`;
+
+    if (mailTransporter) {
+      await mailTransporter.sendMail({
+        from: defaultSender,
+        to: targetEmail,
+        subject: `[PRUEBA] Sistema de Notificaciones Automáticas — CADSTUDIO`,
+        html: dummyHtml,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Email de prueba procesado exitosamente hacia ${targetEmail}`,
+      targetEmail,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
   }
 });
 

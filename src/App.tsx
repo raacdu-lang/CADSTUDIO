@@ -12,6 +12,7 @@ import {
   getAnnouncement,
   getStudioCategories,
   incrementVisitCount,
+  initFirestoreSync,
 } from './services/storageService';
 import { Navbar } from './components/Navbar';
 import { AnnouncementBanner } from './components/AnnouncementBanner';
@@ -19,6 +20,7 @@ import { OffersPanel } from './components/OffersPanel';
 import { Hero } from './components/Hero';
 import { CoreCategoriesSection } from './components/CoreCategoriesSection';
 import { PortfolioGallery } from './components/PortfolioGallery';
+import { CinemaSection } from './components/CinemaSection';
 import { FullPortfolioPage } from './components/FullPortfolioPage';
 import { ServicesSection } from './components/ServicesSection';
 import { QuickContact } from './components/QuickContact';
@@ -46,6 +48,11 @@ export default function App() {
   // Check URL query parameters for direct client token link (?token=xxx) and categories (?categoria=xxx)
   useEffect(() => {
     incrementVisitCount();
+
+    // Hydrate cloud state from Firebase Firestore
+    initFirestoreSync(() => {
+      refreshData();
+    });
 
     try {
       const params = new URLSearchParams(window.location.search);
@@ -164,6 +171,13 @@ export default function App() {
                 setActiveView('full-portfolio');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
+            />
+
+            {/* Cinema & Audiovisual Pieces */}
+            <CinemaSection
+              cinemaItems={portfolioItems.filter((i) => i.mediaType === 'video' || i.aspectRatio === '16:9' || i.aspectRatio === '9:16')}
+              config={studioConfig}
+              onSelectItem={handleOpenViewerFromPortfolio}
             />
 
             <ServicesSection

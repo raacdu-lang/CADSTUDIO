@@ -72,7 +72,7 @@ export const Hero: React.FC<HeroProps> = ({
           <div className="lg:col-span-5 relative">
             <div className="relative aspect-[16/10] sm:aspect-[4/3] rounded-2xl overflow-hidden border border-[#2B7574]/40 shadow-2xl bg-[#0E2931] group">
               <img
-                src="/src/assets/images/hero_photographer_cinematic_1790312865168.jpg"
+                src={config.heroImage || "/src/assets/images/hero_photographer_cinematic_1790312865168.jpg"}
                 alt="Mateo Valenzuela en estudio con cámara Leica y ópticas de autor"
                 className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-700 ease-out"
                 loading="eager"
