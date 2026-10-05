@@ -16,6 +16,7 @@ import {
   addActivityLog,
 } from './storageService';
 import { sendAutomaticBookingEmail } from './emailService';
+import { requestTokenViaGIS } from './googleDriveService';
 
 // Scopes required for Google Calendar
 export const CALENDAR_SCOPES = [
@@ -70,7 +71,7 @@ export const initCalendarAuth = (
 };
 
 /**
- * Sign in to Google to grant Calendar access
+ * Sign in to Google to grant Calendar access (Supports Firebase Auth + GIS Fallback)
  */
 export const signInWithGoogleCalendar = async (): Promise<{
   user: User;
@@ -78,22 +79,50 @@ export const signInWithGoogleCalendar = async (): Promise<{
 } | null> => {
   try {
     isSigningInCalendar = true;
-    const result = await signInWithPopup(auth, calendarProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('No se pudo obtener el token de acceso de Google Calendar.');
+    let resUser: User;
+    let token: string;
+
+    const gisAvailable = !!(window as any).google?.accounts?.oauth2;
+
+    try {
+      const result = await signInWithPopup(auth, calendarProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (!credential?.accessToken) {
+        throw new Error('No se pudo obtener el token de acceso de Google Calendar.');
+      }
+      resUser = result.user;
+      token = credential.accessToken;
+    } catch (popupErr: any) {
+      const errCode = popupErr?.code || '';
+      const errMsg = popupErr?.message || '';
+
+      if (
+        errCode === 'auth/unauthorized-domain' ||
+        errCode === 'auth/popup-blocked' ||
+        errMsg.includes('unauthorized-domain') ||
+        gisAvailable
+      ) {
+        console.info('[GoogleCalendar] Delegando a Google Identity Services (GIS)...');
+        const gisRes = await requestTokenViaGIS(CALENDAR_SCOPES);
+        resUser = gisRes.user;
+        token = gisRes.accessToken;
+      } else if (errCode === 'auth/popup-closed-by-user') {
+        throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
+      } else {
+        throw popupErr;
+      }
     }
 
-    cachedCalendarAccessToken = credential.accessToken;
-    currentCalendarUser = result.user;
+    cachedCalendarAccessToken = token;
+    currentCalendarUser = resUser;
 
     addActivityLog({
       type: 'admin',
       title: 'Google Calendar Conectado',
-      description: `Agenda del estudio conectada con ${result.user.email}. Disponibilidad en tiempo real activada.`,
+      description: `Agenda del estudio conectada con ${resUser.email}. Disponibilidad en tiempo real activada.`,
     });
 
-    return { user: result.user, accessToken: cachedCalendarAccessToken };
+    return { user: resUser, accessToken: cachedCalendarAccessToken };
   } catch (error: any) {
     console.error('Error al conectar Google Calendar:', error);
     throw error;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ClientGallery,
   PortfolioItem,
@@ -144,6 +144,12 @@ import {
 } from 'recharts';
 import { GoogleDriveSyncModal, DriveSyncMode } from './GoogleDriveSyncModal';
 import { isFirebaseConnected } from '../services/storageService';
+import {
+  isDriveConnected,
+  signInWithGoogleDrive,
+  signOutDrive,
+  getDriveCurrentUser,
+} from '../services/googleDriveService';
 
 interface AdminDashboardProps {
   onOpenClientPortalWithToken: (token: string) => void;
@@ -238,6 +244,109 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [manualPhotoSize, setManualPhotoSize] = useState<string>('48.5 MB RAW');
   const [manualPhotoDimensions, setManualPhotoDimensions] = useState<string>('9504 × 6336 px');
   const [isProcessingLocalFiles, setIsProcessingLocalFiles] = useState<boolean>(false);
+
+  // Google Drive & Client Gallery Editor state
+  const [isDriveLinked, setIsDriveLinked] = useState<boolean>(isDriveConnected());
+  const [driveUserEmail, setDriveUserEmail] = useState<string | null>(getDriveCurrentUser()?.email || null);
+  const [isConnectingDrive, setIsConnectingDrive] = useState<boolean>(false);
+  const [clientEditTab, setClientEditTab] = useState<'acomodo' | 'add_photos' | 'info'>('acomodo');
+  const [draggedGalleryPhotoId, setDraggedGalleryPhotoId] = useState<string | null>(null);
+  const [dragOverGalleryPhotoId, setDragOverGalleryPhotoId] = useState<string | null>(null);
+
+  // Gmail (otro correo) SMTP state
+  const [showSmtpConfigDrawer, setShowSmtpConfigDrawer] = useState<boolean>(false);
+  const [smtpConfigForm, setSmtpConfigForm] = useState({
+    user: '',
+    pass: '',
+    host: 'smtp.gmail.com',
+    port: 465,
+    from: 'CADSTUDIO Citas <notificaciones@cadstudio.mx>',
+    studioRecipient: 'cadcad111.3@gmail.com',
+  });
+  const [smtpStatus, setSmtpStatus] = useState<{
+    configured: boolean;
+    user?: string;
+    isGmail?: boolean;
+    host?: string;
+    from?: string;
+    studioRecipient?: string;
+  } | null>(null);
+  const [isSavingSmtp, setIsSavingSmtp] = useState<boolean>(false);
+  const [smtpFeedback, setSmtpFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    setIsDriveLinked(isDriveConnected());
+    setDriveUserEmail(getDriveCurrentUser()?.email || null);
+
+    fetch('/api/smtp-config')
+      .then((res) => res.json())
+      .then((data) => {
+        setSmtpStatus(data);
+        if (data.user) {
+          setSmtpConfigForm((prev) => ({
+            ...prev,
+            user: data.user,
+            from: data.from || prev.from,
+            studioRecipient: data.studioRecipient || prev.studioRecipient,
+            host: data.host || prev.host,
+            port: data.port || prev.port,
+          }));
+        }
+      })
+      .catch((err) => console.warn('Could not load smtp-config:', err));
+  }, []);
+
+  const handleConnectDrive = async () => {
+    setIsConnectingDrive(true);
+    try {
+      const res = await signInWithGoogleDrive();
+      if (res?.user) {
+        setIsDriveLinked(true);
+        setDriveUserEmail(res.user.email);
+        setSaveSuccessMsg(`¡Google Drive conectado con éxito como ${res.user.email}!`);
+        setTimeout(() => setSaveSuccessMsg(null), 3000);
+      }
+    } catch (err: any) {
+      console.error('Error al conectar Google Drive:', err);
+      setSaveSuccessMsg(`Aviso: ${err.message || 'No se pudo conectar Google Drive'}`);
+      setTimeout(() => setSaveSuccessMsg(null), 4000);
+    } finally {
+      setIsConnectingDrive(false);
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    await signOutDrive();
+    setIsDriveLinked(false);
+    setDriveUserEmail(null);
+    setSaveSuccessMsg('Google Drive desconectado.');
+    setTimeout(() => setSaveSuccessMsg(null), 2000);
+  };
+
+  const handleSaveSmtpConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSmtp(true);
+    setSmtpFeedback(null);
+    try {
+      const res = await fetch('/api/smtp-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpConfigForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.details || 'Error al validar credenciales de Gmail.');
+      }
+      setSmtpFeedback({ type: 'success', message: data.message || '¡Gmail conectado con éxito para otro correo!' });
+      setSmtpStatus(data.config);
+      setSaveSuccessMsg('Configuración de Gmail guardada y probada.');
+      setTimeout(() => setSaveSuccessMsg(null), 3000);
+    } catch (err: any) {
+      setSmtpFeedback({ type: 'error', message: err.message || 'No se pudo conectar con Gmail. Verifique el correo y la contraseña de aplicación de 16 caracteres.' });
+    } finally {
+      setIsSavingSmtp(false);
+    }
+  };
 
   // BOT KNOWLEDGE MANAGEMENT STATE
   const [knowledgeMode, setKnowledgeMode] = useState<'docs' | 'tutor'>('docs');
@@ -974,6 +1083,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (uploadTargetGallery?.id === galleryId) {
       setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
     }
+    if (editingClient?.id === galleryId) {
+      setEditingClient({ ...editingClient, files: newFiles });
+    }
     setSaveSuccessMsg('Acomodo de fotos de la galería guardado.');
     setTimeout(() => setSaveSuccessMsg(null), 2000);
   };
@@ -999,6 +1111,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
     if (uploadTargetGallery?.id === galleryId) {
       setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
+    }
+    if (editingClient?.id === galleryId) {
+      setEditingClient({ ...editingClient, files: newFiles });
     }
     setSaveSuccessMsg(`Foto reubicada en posición #${targetIndex + 1}.`);
     setTimeout(() => setSaveSuccessMsg(null), 2000);
@@ -1030,6 +1145,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (uploadTargetGallery?.id === galleryId) {
       setUploadTargetGallery({ ...uploadTargetGallery, files: newFiles });
     }
+    if (editingClient?.id === galleryId) {
+      setEditingClient({ ...editingClient, files: newFiles });
+    }
     setSaveSuccessMsg(`Foto movida a la posición #${targetIndex + 1}.`);
     setTimeout(() => setSaveSuccessMsg(null), 2000);
   };
@@ -1040,6 +1158,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setGalleries(updated);
     if (visualReorderGallery?.id === galleryId) {
       setVisualReorderGallery({ ...visualReorderGallery, coverImage: coverUrl });
+    }
+    if (editingClient?.id === galleryId) {
+      setEditingClient({ ...editingClient, coverImage: coverUrl });
     }
     setSaveSuccessMsg('¡Foto establecida como nueva portada de la galería!');
     setTimeout(() => setSaveSuccessMsg(null), 2500);
@@ -1567,6 +1688,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
+            {/* Google Drive Workspace Account Connection Card */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-[#0d2229] via-[#0E2931] to-[#070e11] border border-[#2B7574]/60 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-[#2B7574]/30 border border-[#2B7574]/60 text-[#7cc0be]">
+                  <FolderSync className="w-5 h-5 text-[#7cc0be]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-bold text-white">Google Drive Workspace</h4>
+                    {isDriveLinked ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono-data bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-medium">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Conectado con esta cuenta: {driveUserEmail || 'cadcad111.3@gmail.com'}
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono-data bg-zinc-900 text-zinc-400 border border-zinc-700">
+                        No Conectado
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-300 mt-0.5">
+                    Conecta tu Google Drive con esta cuenta para sincronizar carpetas enteras de clientes y alimentar el portafolio en alta resolución.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {isDriveLinked ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDriveSyncMode('galleries');
+                        setShowDriveSyncModal(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-[#2B7574] hover:bg-[#38918f] text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+                    >
+                      <FolderSync className="w-3.5 h-3.5" />
+                      <span>Sincronizar Carpetas</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConnectDrive}
+                      disabled={isConnectingDrive}
+                      className="px-3 py-1.5 rounded-xl bg-[#0E2931] hover:bg-[#1a4a58] border border-[#2B7574]/50 text-zinc-200 text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      {isConnectingDrive ? 'Conectando...' : 'Cambiar Cuenta'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDisconnectDrive}
+                      className="px-2.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 text-xs border border-zinc-800 transition-colors cursor-pointer"
+                    >
+                      Desconectar
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleConnectDrive}
+                    disabled={isConnectingDrive}
+                    className="px-4 py-2 rounded-xl bg-white hover:bg-zinc-100 text-zinc-900 text-xs font-bold transition-all flex items-center gap-2 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                      <path fill="#EA3535" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                    </svg>
+                    <span>{isConnectingDrive ? 'Conectando...' : 'Conectar Google Drive con esta cuenta'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Client List Cards */}
             <div className="grid grid-cols-1 gap-4">
               {galleries.map((gal) => (
@@ -1684,10 +1880,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span>Acomodo Visual ({gal.files.length})</span>
                     </button>
 
-                    {/* Edit */}
+                    {/* Edit: Modificar acomodo, agregar fotos e información */}
                     <button
                       onClick={() => {
                         setEditingClient(gal);
+                        setUploadTargetGallery(gal);
+                        setClientEditTab('acomodo');
                         setClientForm({
                           clientName: gal.clientName,
                           clientEmail: gal.clientEmail,
@@ -1703,10 +1901,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         });
                         setShowAddClientModal(true);
                       }}
-                      className="p-1.5 text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-700 rounded-lg transition-colors"
-                      title="Modificar perfil e información"
+                      className="px-3 py-1.5 text-xs text-white bg-gradient-to-r from-rose-700 to-rose-600 hover:from-rose-600 hover:to-rose-500 rounded-lg transition-colors flex items-center gap-1.5 font-medium shadow-sm"
+                      title="Editar fotos, acomodo visual e información de la galería"
                     >
                       <Edit3 className="w-3.5 h-3.5" />
+                      <span>Editar ({gal.files.length} fotos)</span>
                     </button>
 
                     {/* Revoke / Delete */}
@@ -3516,6 +3715,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
+                    onClick={() => setShowSmtpConfigDrawer(!showSmtpConfigDrawer)}
+                    className="px-3 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/60 border border-blue-700/50 text-blue-200 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Mail className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Conectar Gmail (otro correo)</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => handleSendTestBookingNotification('cadcad111.3@gmail.com')}
                     disabled={isSendingTestEmail}
                     className="px-3 py-1.5 rounded-xl bg-[#2B7574] hover:bg-[#38918f] text-white text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
@@ -3534,6 +3742,130 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Gmail (otro correo) Configuration Drawer */}
+              {showSmtpConfigDrawer && (
+                <form onSubmit={handleSaveSmtpConfig} className="p-4 rounded-xl bg-[#081519] border border-[#2B7574]/40 space-y-4 animate-in fade-in">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#2B7574]/30 pb-2.5">
+                    <div>
+                      <h4 className="font-bold text-white text-xs flex items-center gap-1.5">
+                        <Mail className="w-4 h-4 text-[#7cc0be]" />
+                        <span>Conectar Gmail con Otro Correo (Despacho de Confirmaciones)</span>
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Usa tu cuenta de Google Drive para los archivos, y envía las confirmaciones automáticas de citas desde otro correo de Gmail.
+                      </p>
+                    </div>
+                    {smtpStatus?.configured ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono-data bg-emerald-950 text-emerald-300 border border-emerald-700 font-semibold self-start sm:self-auto">
+                        Remitente: {smtpStatus.user}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono-data bg-zinc-800 text-zinc-400 self-start sm:self-auto">
+                        Modo Previo (Sin credenciales)
+                      </span>
+                    )}
+                  </div>
+
+                  {smtpFeedback && (
+                    <div className={`p-3 rounded-lg text-xs flex items-center gap-2 ${
+                      smtpFeedback.type === 'success'
+                        ? 'bg-emerald-950/80 text-emerald-200 border border-emerald-600/50'
+                        : 'bg-rose-950/80 text-rose-200 border border-rose-600/50'
+                    }`}>
+                      {smtpFeedback.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <span>{smtpFeedback.message}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">
+                        OTRO CORREO DE GMAIL (REMITENTE) *
+                      </label>
+                      <input
+                        type="email"
+                        value={smtpConfigForm.user}
+                        onChange={(e) => setSmtpConfigForm({ ...smtpConfigForm, user: e.target.value })}
+                        placeholder="ej. notificaciones@cadstudio.mx o tu_otro_correo@gmail.com"
+                        required
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">
+                        CONTRASEÑA DE APLICACIÓN DE GOOGLE (16 CARACTERES) *
+                      </label>
+                      <input
+                        type="password"
+                        value={smtpConfigForm.pass}
+                        onChange={(e) => setSmtpConfigForm({ ...smtpConfigForm, pass: e.target.value })}
+                        placeholder="xxxx xxxx xxxx xxxx"
+                        required
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574] font-mono-data"
+                      />
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-[#7cc0be] hover:underline mt-1 inline-flex items-center gap-1"
+                      >
+                        <span>Generar contraseña de aplicación en Google</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">
+                        NOMBRE DEL REMITENTE ("DE:")
+                      </label>
+                      <input
+                        type="text"
+                        value={smtpConfigForm.from}
+                        onChange={(e) => setSmtpConfigForm({ ...smtpConfigForm, from: e.target.value })}
+                        placeholder="CADSTUDIO Citas <notificaciones@cadstudio.mx>"
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">
+                        CORREO DEL ESTUDIO (RECIBE COPIA DEL DOSSIER)
+                      </label>
+                      <input
+                        type="email"
+                        value={smtpConfigForm.studioRecipient}
+                        onChange={(e) => setSmtpConfigForm({ ...smtpConfigForm, studioRecipient: e.target.value })}
+                        placeholder="cadcad111.3@gmail.com"
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowSmtpConfigDrawer(false)}
+                      className="px-3 py-1.5 text-xs text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      Cerrar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingSmtp}
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-[#2B7574] hover:from-blue-500 hover:to-[#38918f] text-white text-xs font-semibold rounded-xl transition-all shadow-md disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isSavingSmtp ? 'Validando conexión...' : 'Guardar y Conectar este Gmail'}</span>
+                    </button>
+                  </div>
+                </form>
+              )}
 
               {testEmailStatus && (
                 <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-600/50 text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
@@ -4955,144 +5287,746 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
       </div>
 
-      {/* Modal: Add or Edit Client */}
+      {/* Modal: Add or Edit Client Gallery (Full Photo Management & Visual Reorder) */}
       {showAddClientModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#121215] border border-[#27272a] rounded-2xl max-w-xl w-full p-6 space-y-5 animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className={`bg-[#121215] border border-[#27272a] rounded-2xl w-full p-5 sm:p-6 space-y-4 animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-y-auto ${
+            editingClient ? 'max-w-5xl' : 'max-w-xl'
+          }`}>
+            {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h3 className="font-display text-lg font-bold text-white">
-                {editingClient ? 'Modificar Galería de Cliente' : 'Nueva Galería de Entrega Privada'}
-              </h3>
-              <button
-                onClick={() => setShowAddClientModal(false)}
-                className="text-zinc-400 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveClient} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">NOMBRE DEL CLIENTE</label>
-                  <input
-                    type="text"
-                    value={clientForm.clientName}
-                    onChange={(e) => setClientForm({ ...clientForm, clientName: e.target.value })}
-                    placeholder="ej. Valeria Ramos"
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">EMAIL DEL CLIENTE</label>
-                  <input
-                    type="email"
-                    value={clientForm.clientEmail}
-                    onChange={(e) => setClientForm({ ...clientForm, clientEmail: e.target.value })}
-                    placeholder="valeria@email.com"
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                    required
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="block font-mono-data text-zinc-400 mb-1">TÍTULO DEL PROYECTO / SESIÓN</label>
-                <input
-                  type="text"
-                  value={clientForm.title}
-                  onChange={(e) => setClientForm({ ...clientForm, title: e.target.value })}
-                  placeholder="ej. Campaña Colección Atelier Otoño/Invierno"
-                  className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                  required
-                />
+                <h3 className="font-display text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-rose-500" />
+                  <span>
+                    {editingClient ? `Editar Galería Privada: ${editingClient.clientName}` : 'Nueva Galería de Entrega Privada'}
+                  </span>
+                </h3>
+                {editingClient && (
+                  <p className="text-xs text-zinc-400 mt-0.5 font-mono-data">
+                    {editingClient.title} · <strong className="text-rose-400">{editingClient.files.length} fotografías</strong> · Token: {editingClient.token}
+                  </p>
+                )}
               </div>
 
-              <div>
-                <label className="block font-mono-data text-zinc-400 mb-1">SUBTÍTULO / DESCRIPCIÓN BREVE</label>
-                <input
-                  type="text"
-                  value={clientForm.subtitle}
-                  onChange={(e) => setClientForm({ ...clientForm, subtitle: e.target.value })}
-                  placeholder="ej. Sesión Editorial en Estudio & Exterior"
-                  className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">TOKEN ENLACE PRIVADO</label>
-                  <input
-                    type="text"
-                    value={clientForm.token}
-                    onChange={(e) => setClientForm({ ...clientForm, token: e.target.value })}
-                    placeholder="ej. valeria-haute-2026"
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">CÓDIGO PIN (OPCIONAL)</label>
-                  <input
-                    type="text"
-                    value={clientForm.pin}
-                    onChange={(e) => setClientForm({ ...clientForm, pin: e.target.value })}
-                    placeholder="ej. 2026"
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">FECHA EVENTO</label>
-                  <input
-                    type="date"
-                    value={clientForm.eventDate}
-                    onChange={(e) => setClientForm({ ...clientForm, eventDate: e.target.value })}
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">FECHA VENCIMIENTO</label>
-                  <input
-                    type="date"
-                    value={clientForm.expiryDate}
-                    onChange={(e) => setClientForm({ ...clientForm, expiryDate: e.target.value })}
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-mono-data text-zinc-400 mb-1">LÍMITE SELECCIÓN</label>
-                  <input
-                    type="number"
-                    value={clientForm.selectionLimit}
-                    onChange={(e) => setClientForm({ ...clientForm, selectionLimit: Number(e.target.value) })}
-                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-zinc-800">
+              <div className="flex items-center gap-2">
+                {editingClient && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenClientPortalWithToken(editingClient.token)}
+                    className="px-3 py-1.5 text-xs text-rose-300 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/50 rounded-lg transition-colors flex items-center gap-1.5"
+                    title="Abrir vista previa del cliente"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Ver como Cliente</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => setShowAddClientModal(false)}
-                  className="px-4 py-2 text-zinc-400 hover:text-white"
+                  onClick={() => {
+                    setShowAddClientModal(false);
+                    setEditingClient(null);
+                  }}
+                  className="p-1 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors"
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-xl"
-                >
-                  Guardar Galería
+                  <X className="w-5 h-5" />
                 </button>
               </div>
-            </form>
+            </div>
+
+            {editingClient ? (
+              <div className="space-y-4">
+                {/* Navigation Tabs inside the Editor */}
+                <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 overflow-x-auto scrollbar-thin">
+                  <button
+                    type="button"
+                    onClick={() => setClientEditTab('acomodo')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                      clientEditTab === 'acomodo'
+                        ? 'bg-[#2B7574] text-white shadow-md'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>1. Acomodo Visual & Secuencia ({editingClient.files.length} fotos)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setClientEditTab('add_photos')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                      clientEditTab === 'add_photos'
+                        ? 'bg-rose-600 text-white shadow-md'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>2. Agregar Fotos (+)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setClientEditTab('info')}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                      clientEditTab === 'info'
+                        ? 'bg-zinc-700 text-white shadow-md'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>3. Datos de la Entrega & Cliente</span>
+                  </button>
+                </div>
+
+                {/* TAB 1: ACOMODO VISUAL & SECUENCIA (LIKE PORTFOLIO) */}
+                {clientEditTab === 'acomodo' && (
+                  <div className="space-y-4 animate-in fade-in">
+                    {/* Filmstrip Sequence Ribbon */}
+                    {editingClient.files && editingClient.files.length > 0 && (
+                      <div className="p-3.5 rounded-xl bg-[#071317] border border-[#2B7574]/40 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between text-[11px] font-mono-data text-zinc-400 gap-2">
+                          <span className="text-[#7cc0be] font-bold flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                            TIRA DE SECUENCIA ({editingClient.files.length} FOTOGRAFÍAS)
+                          </span>
+                          <span className="text-zinc-500">
+                            Arrastra tarjetas o usa los selectores para cambiar el orden
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                          {editingClient.files.map((file, idx) => {
+                            const isCover = (editingClient.coverImage === file.previewUrl || editingClient.coverImage === file.originalUrl);
+                            return (
+                              <div
+                                key={file.id}
+                                className={`relative shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all group ${
+                                  isCover ? 'border-amber-400 ring-2 ring-amber-400/50' : 'border-[#2B7574]/50'
+                                }`}
+                                title={`#${idx + 1}: ${file.title}`}
+                              >
+                                <img src={file.previewUrl} alt={file.title} className="w-full h-full object-cover" />
+                                <span className="absolute top-0 left-0 bg-black/80 px-1 text-[9px] font-mono-data font-bold text-white rounded-br">
+                                  #{idx + 1}
+                                </span>
+                                {isCover && (
+                                  <span className="absolute bottom-0 right-0 bg-amber-400 text-black px-1 text-[8px] font-bold rounded-tl" title="Portada">
+                                    ⭐
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Photos Grid with Full Controls */}
+                    {editingClient.files.length === 0 ? (
+                      <div className="p-12 text-center rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+                        <ImageIcon className="w-10 h-10 text-zinc-500 mx-auto" />
+                        <h4 className="text-white font-bold text-sm">Esta galería aún no tiene fotografías</h4>
+                        <p className="text-xs text-zinc-400 max-w-sm mx-auto">
+                          Sube fotos desde tu computadora o sincroniza una carpeta de Google Drive en la pestaña "Agregar Fotos".
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setClientEditTab('add_photos')}
+                          className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl"
+                        >
+                          Ir a Agregar Fotos
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between text-xs text-zinc-400">
+                          <span className="font-mono-data">
+                            Mostrando {editingClient.files.length} fotografías · Orden interactivo en tiempo real
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setClientEditTab('add_photos')}
+                            className="px-3 py-1 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Agregar más fotos</span>
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[52vh] overflow-y-auto pr-1">
+                          {editingClient.files.map((file, idx) => {
+                            const isCover = (editingClient.coverImage === file.previewUrl || editingClient.coverImage === file.originalUrl);
+                            const isDragging = draggedGalleryPhotoId === file.id;
+                            const isDragOver = dragOverGalleryPhotoId === file.id;
+
+                            return (
+                              <div
+                                key={file.id}
+                                draggable
+                                onDragStart={(e) => {
+                                  setDraggedGalleryPhotoId(file.id);
+                                  e.dataTransfer.setData('text/plain', file.id);
+                                }}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  if (dragOverGalleryPhotoId !== file.id) setDragOverGalleryPhotoId(file.id);
+                                }}
+                                onDragLeave={() => {
+                                  if (dragOverGalleryPhotoId === file.id) setDragOverGalleryPhotoId(null);
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  const sourceId = e.dataTransfer.getData('text/plain') || draggedGalleryPhotoId;
+                                  setDraggedGalleryPhotoId(null);
+                                  setDragOverGalleryPhotoId(null);
+                                  if (sourceId && sourceId !== file.id) {
+                                    handleDropGalleryFile(editingClient.id, sourceId, file.id);
+                                  }
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedGalleryPhotoId(null);
+                                  setDragOverGalleryPhotoId(null);
+                                }}
+                                className={`group relative rounded-xl overflow-hidden bg-[#0d1a1e] border transition-all duration-200 select-none ${
+                                  isCover ? 'border-amber-400/90 ring-2 ring-amber-400/30' : 'border-[#2B7574]/40 hover:border-[#2B7574]'
+                                } ${isDragging ? 'opacity-30 scale-95' : ''} ${
+                                  isDragOver ? 'ring-4 ring-[#2B7574] scale-102 border-white' : ''
+                                }`}
+                              >
+                                {/* Media Container */}
+                                <div className="relative aspect-[4/3] bg-black overflow-hidden">
+                                  <img
+                                    src={file.previewUrl}
+                                    alt={file.title}
+                                    className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                                  />
+
+                                  {/* Top Banner Overlays */}
+                                  <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1 z-20">
+                                    {/* Cover Badge / Toggle */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetGalleryCoverFromFile(editingClient.id, file.previewUrl)}
+                                      className={`px-2 py-0.5 rounded-full text-[9px] font-mono-data font-bold flex items-center gap-1 shadow-md transition-all ${
+                                        isCover
+                                          ? 'bg-amber-400 text-black border border-amber-300'
+                                          : 'bg-black/80 hover:bg-amber-500/80 text-zinc-300 hover:text-black border border-white/20'
+                                      }`}
+                                      title={isCover ? 'Es la portada actual' : 'Clic para hacer portada de la galería'}
+                                    >
+                                      <Star className={`w-2.5 h-2.5 ${isCover ? 'fill-black' : ''}`} />
+                                      <span>{isCover ? 'PORTADA' : 'HACER PORTADA'}</span>
+                                    </button>
+
+                                    {/* Grip + Position Selector */}
+                                    <div className="flex items-center gap-1 bg-black/80 backdrop-blur-md px-1.5 py-0.5 rounded-lg border border-white/20 text-[#E2E2E0]">
+                                      <div
+                                        className="cursor-grab active:cursor-grabbing p-0.5 text-[#2B7574]"
+                                        title="Arrastrar para mover foto"
+                                      >
+                                        <GripVertical className="w-3.5 h-3.5" />
+                                      </div>
+                                      <select
+                                        value={idx + 1}
+                                        onChange={(e) => handleSetGalleryFilePosition(editingClient.id, file.id, Number(e.target.value))}
+                                        className="bg-transparent text-[11px] font-mono-data font-bold text-white focus:outline-none cursor-pointer"
+                                        title="Cambiar posición directamente"
+                                      >
+                                        {editingClient.files.map((_, i) => (
+                                          <option key={i + 1} value={i + 1} className="bg-zinc-900 text-white">
+                                            #{i + 1} de {editingClient.files.length}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+
+                                  {/* Hover Actions Bar */}
+                                  <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-3 z-10">
+                                    <div className="pt-7 flex items-center justify-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMoveGalleryFile(editingClient.id, file.id, 'top')}
+                                        disabled={idx === 0}
+                                        className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 disabled:opacity-30 text-white transition-colors"
+                                        title="Mover al principio"
+                                      >
+                                        <ChevronsUp className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMoveGalleryFile(editingClient.id, file.id, 'up')}
+                                        disabled={idx === 0}
+                                        className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 disabled:opacity-30 text-white transition-colors"
+                                        title="Subir un lugar"
+                                      >
+                                        <ArrowUp className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMoveGalleryFile(editingClient.id, file.id, 'down')}
+                                        disabled={idx === editingClient.files.length - 1}
+                                        className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 disabled:opacity-30 text-white transition-colors"
+                                        title="Bajar un lugar"
+                                      >
+                                        <ArrowDown className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMoveGalleryFile(editingClient.id, file.id, 'bottom')}
+                                        disabled={idx === editingClient.files.length - 1}
+                                        className="p-1.5 rounded-lg bg-white/10 hover:bg-white/25 disabled:opacity-30 text-white transition-colors"
+                                        title="Mover al final"
+                                      >
+                                        <ChevronsDown className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+
+                                    <div className="flex items-center justify-between pt-2 border-t border-white/20">
+                                      <span className="text-[10px] font-mono-data text-zinc-300 truncate max-w-[130px]">
+                                        {file.title}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (window.confirm(`¿Eliminar la fotografía "${file.title}" de esta entrega privada?`)) {
+                                            const updated = removePhotoFromGallery(editingClient.id, file.id);
+                                            if (updated) setEditingClient(updated);
+                                            setGalleries(getClientGalleries());
+                                            setSaveSuccessMsg('Fotografía eliminada de la galería.');
+                                            setTimeout(() => setSaveSuccessMsg(null), 2000);
+                                          }
+                                        }}
+                                        className="p-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/60 text-rose-300 hover:text-white transition-colors cursor-pointer"
+                                        title="Eliminar de la galería"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Caption info */}
+                                <div className="p-2.5 bg-[#0a1417] flex items-center justify-between text-[11px] font-mono-data">
+                                  <span className="text-zinc-300 font-bold truncate max-w-[150px]">
+                                    #{idx + 1} · {file.title}
+                                  </span>
+                                  <span className="text-zinc-500 text-[10px]">
+                                    {file.fileSize || 'Alta Res'}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 2: AGREGAR FOTOS A LA GALERÍA */}
+                {clientEditTab === 'add_photos' && (
+                  <div className="space-y-5 animate-in fade-in text-xs">
+                    {/* Option A: Dropzone Local File Upload */}
+                    <div className="p-5 rounded-2xl bg-[#091519] border border-[#2B7574]/50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                          <Upload className="w-4 h-4 text-[#7cc0be]" />
+                          <span>Opción 1: Subir Archivos Fotográficos desde tu Computadora</span>
+                        </span>
+                        <span className="text-[10px] font-mono-data text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                          Multi-Archivo Soportado
+                        </span>
+                      </div>
+
+                      <label className="p-8 rounded-2xl border-2 border-dashed border-[#2B7574]/60 bg-[#070e11] hover:border-[#2B7574] transition-colors flex flex-col items-center justify-center cursor-pointer text-center group">
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          disabled={isProcessingLocalFiles}
+                          onChange={async (e) => {
+                            const files = Array.from(e.target.files || []);
+                            if (files.length === 0 || !editingClient) return;
+                            setIsProcessingLocalFiles(true);
+                            try {
+                              const newItems: ClientFile[] = [];
+                              for (let i = 0; i < files.length; i++) {
+                                const f = files[i];
+                                const dataUrl = await new Promise<string>((resolve) => {
+                                  const reader = new FileReader();
+                                  reader.onload = (ev) => resolve(ev.target?.result as string);
+                                  reader.readAsDataURL(f);
+                                });
+                                newItems.push({
+                                  id: `file-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 5)}`,
+                                  title: f.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+                                  type: 'image',
+                                  previewUrl: dataUrl,
+                                  originalUrl: dataUrl,
+                                  aspectRatio: '16:9',
+                                  fileSize: `${(f.size / (1024 * 1024)).toFixed(1)} MB RAW`,
+                                  dimensions: '8368 × 4707 px',
+                                  downloadsCount: 0,
+                                });
+                              }
+                              const updatedGal = addPhotosToGallery(editingClient.id, newItems);
+                              if (updatedGal) setEditingClient(updatedGal);
+                              setGalleries(getClientGalleries());
+                              setSaveSuccessMsg(`¡${newItems.length} fotografías añadidas a ${editingClient.clientName}!`);
+                              setTimeout(() => setSaveSuccessMsg(null), 3000);
+                              setClientEditTab('acomodo');
+                            } catch (err: any) {
+                              console.error('Error processing files:', err);
+                            } finally {
+                              setIsProcessingLocalFiles(false);
+                            }
+                          }}
+                          className="hidden"
+                        />
+                        <Upload className="w-10 h-10 text-[#2B7574] group-hover:scale-110 transition-transform mb-2" />
+                        <span className="font-bold text-white text-xs">
+                          {isProcessingLocalFiles ? 'Procesando fotografías en alta resolución...' : 'Haz clic o arrastra fotos aquí'}
+                        </span>
+                        <span className="text-[11px] text-zinc-400 mt-1">
+                          Soporta múltiples archivos JPG, PNG, WEBP o RAW a la vez
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Option B: Add by URL */}
+                    <div className="p-4 rounded-xl bg-zinc-900 border border-zinc-800 space-y-3">
+                      <span className="font-bold text-white text-xs block">
+                        Opción 2: Añadir Foto por Enlace / URL Directo
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <input
+                          type="url"
+                          value={manualPhotoUrl}
+                          onChange={(e) => setManualPhotoUrl(e.target.value)}
+                          placeholder="https://ejemplo.com/foto.jpg"
+                          className="sm:col-span-2 p-2.5 rounded-lg bg-zinc-950 border border-zinc-700 text-white focus:outline-none focus:border-[#2B7574]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!manualPhotoUrl.trim() || !editingClient) return;
+                            const newPhoto: ClientFile = {
+                              id: `file-url-${Date.now()}`,
+                              title: `Foto_${editingClient.files.length + 1}`,
+                              type: 'image',
+                              previewUrl: manualPhotoUrl.trim(),
+                              originalUrl: manualPhotoUrl.trim(),
+                              aspectRatio: '16:9',
+                              fileSize: '45.0 MB RAW',
+                              dimensions: '8368 × 4707 px',
+                              downloadsCount: 0,
+                            };
+                            const updated = addPhotosToGallery(editingClient.id, [newPhoto]);
+                            if (updated) setEditingClient(updated);
+                            setGalleries(getClientGalleries());
+                            setManualPhotoUrl('');
+                            setSaveSuccessMsg('¡Foto añadida a la galería!');
+                            setTimeout(() => setSaveSuccessMsg(null), 2500);
+                            setClientEditTab('acomodo');
+                          }}
+                          className="px-4 py-2.5 bg-[#2B7574] hover:bg-[#38918f] text-white font-semibold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Añadir a Galería
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Option C: Google Drive Sync */}
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-blue-950/40 via-zinc-900 to-[#0e1d22] border border-blue-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <h5 className="font-bold text-white text-xs flex items-center gap-1.5">
+                          <FolderSync className="w-4 h-4 text-blue-400" />
+                          <span>Opción 3: Importar Carpeta Completa desde Google Drive</span>
+                        </h5>
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          Sincroniza todas las fotos de una carpeta de Drive directamente en esta galería privada.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDriveSyncGalleryId(editingClient.id);
+                          setDriveSyncMode('galleries');
+                          setShowDriveSyncModal(true);
+                        }}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-xs transition-colors shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      >
+                        <FolderSync className="w-3.5 h-3.5" />
+                        <span>Abrir Sincronizador de Drive</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: DATOS DE LA ENTREGA & CLIENTE */}
+                {clientEditTab === 'info' && (
+                  <form onSubmit={handleSaveClient} className="space-y-4 text-xs animate-in fade-in">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">NOMBRE DEL CLIENTE *</label>
+                        <input
+                          type="text"
+                          value={clientForm.clientName}
+                          onChange={(e) => setClientForm({ ...clientForm, clientName: e.target.value })}
+                          placeholder="ej. Valeria Ramos"
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">EMAIL DEL CLIENTE *</label>
+                        <input
+                          type="email"
+                          value={clientForm.clientEmail}
+                          onChange={(e) => setClientForm({ ...clientForm, clientEmail: e.target.value })}
+                          placeholder="valeria@email.com"
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">TÍTULO DEL PROYECTO / SESIÓN *</label>
+                      <input
+                        type="text"
+                        value={clientForm.title}
+                        onChange={(e) => setClientForm({ ...clientForm, title: e.target.value })}
+                        placeholder="ej. Campaña Colección Atelier Otoño/Invierno"
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">SUBTÍTULO / DESCRIPCIÓN BREVE</label>
+                      <input
+                        type="text"
+                        value={clientForm.subtitle}
+                        onChange={(e) => setClientForm({ ...clientForm, subtitle: e.target.value })}
+                        placeholder="ej. Sesión Editorial en Estudio & Exterior"
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">TOKEN ENLACE PRIVADO</label>
+                        <input
+                          type="text"
+                          value={clientForm.token}
+                          onChange={(e) => setClientForm({ ...clientForm, token: e.target.value })}
+                          placeholder="ej. valeria-haute-2026"
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">CÓDIGO PIN (OPCIONAL)</label>
+                        <input
+                          type="text"
+                          value={clientForm.pin}
+                          onChange={(e) => setClientForm({ ...clientForm, pin: e.target.value })}
+                          placeholder="ej. 2026"
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">FECHA EVENTO</label>
+                        <input
+                          type="date"
+                          value={clientForm.eventDate}
+                          onChange={(e) => setClientForm({ ...clientForm, eventDate: e.target.value })}
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">FECHA VENCIMIENTO</label>
+                        <input
+                          type="date"
+                          value={clientForm.expiryDate}
+                          onChange={(e) => setClientForm({ ...clientForm, expiryDate: e.target.value })}
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-mono-data text-zinc-400 mb-1">LÍMITE SELECCIÓN</label>
+                        <input
+                          type="number"
+                          value={clientForm.selectionLimit}
+                          onChange={(e) => setClientForm({ ...clientForm, selectionLimit: Number(e.target.value) })}
+                          className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-mono-data text-zinc-400 mb-1">URL IMAGEN DE PORTADA</label>
+                      <input
+                        type="text"
+                        value={clientForm.coverImage}
+                        onChange={(e) => setClientForm({ ...clientForm, coverImage: e.target.value })}
+                        className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddClientModal(false);
+                          setEditingClient(null);
+                        }}
+                        className="px-4 py-2 text-zinc-400 hover:text-white cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-xl cursor-pointer"
+                      >
+                        Guardar Cambios de la Galería
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ) : (
+              /* Create New Client Gallery Form */
+              <form onSubmit={handleSaveClient} className="space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">NOMBRE DEL CLIENTE *</label>
+                    <input
+                      type="text"
+                      value={clientForm.clientName}
+                      onChange={(e) => setClientForm({ ...clientForm, clientName: e.target.value })}
+                      placeholder="ej. Valeria Ramos"
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">EMAIL DEL CLIENTE *</label>
+                    <input
+                      type="email"
+                      value={clientForm.clientEmail}
+                      onChange={(e) => setClientForm({ ...clientForm, clientEmail: e.target.value })}
+                      placeholder="valeria@email.com"
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-mono-data text-zinc-400 mb-1">TÍTULO DEL PROYECTO / SESIÓN *</label>
+                  <input
+                    type="text"
+                    value={clientForm.title}
+                    onChange={(e) => setClientForm({ ...clientForm, title: e.target.value })}
+                    placeholder="ej. Campaña Colección Atelier Otoño/Invierno"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-mono-data text-zinc-400 mb-1">SUBTÍTULO / DESCRIPCIÓN BREVE</label>
+                  <input
+                    type="text"
+                    value={clientForm.subtitle}
+                    onChange={(e) => setClientForm({ ...clientForm, subtitle: e.target.value })}
+                    placeholder="ej. Sesión Editorial en Estudio & Exterior"
+                    className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">TOKEN ENLACE PRIVADO</label>
+                    <input
+                      type="text"
+                      value={clientForm.token}
+                      onChange={(e) => setClientForm({ ...clientForm, token: e.target.value })}
+                      placeholder="ej. valeria-haute-2026"
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">CÓDIGO PIN (OPCIONAL)</label>
+                    <input
+                      type="text"
+                      value={clientForm.pin}
+                      onChange={(e) => setClientForm({ ...clientForm, pin: e.target.value })}
+                      placeholder="ej. 2026"
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500 font-mono-data"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">FECHA EVENTO</label>
+                    <input
+                      type="date"
+                      value={clientForm.eventDate}
+                      onChange={(e) => setClientForm({ ...clientForm, eventDate: e.target.value })}
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">FECHA VENCIMIENTO</label>
+                    <input
+                      type="date"
+                      value={clientForm.expiryDate}
+                      onChange={(e) => setClientForm({ ...clientForm, expiryDate: e.target.value })}
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-mono-data text-zinc-400 mb-1">LÍMITE SELECCIÓN</label>
+                    <input
+                      type="number"
+                      value={clientForm.selectionLimit}
+                      onChange={(e) => setClientForm({ ...clientForm, selectionLimit: Number(e.target.value) })}
+                      className="w-full p-2.5 rounded-lg bg-zinc-900 border border-zinc-700 text-white focus:outline-none focus:border-rose-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddClientModal(false)}
+                    className="px-4 py-2 text-zinc-400 hover:text-white cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-semibold rounded-xl cursor-pointer"
+                  >
+                    Crear Galería
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

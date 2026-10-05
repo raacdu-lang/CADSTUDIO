@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import nodemailer, { type Transporter } from 'nodemailer';
@@ -15,31 +16,75 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
-// Nodemailer transporter configuration
-let mailTransporter: Transporter | null = null;
-const smtpHost = process.env.SMTP_HOST;
-const smtpPort = Number(process.env.SMTP_PORT) || 587;
-const smtpUser = process.env.SMTP_USER;
-const smtpPass = process.env.SMTP_PASS;
+// Nodemailer transporter & dynamic Gmail / SMTP configuration
+const CONFIG_FILE = path.resolve(__dirname, 'smtp-config.json');
+
+interface SmtpStoredConfig {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  from: string;
+  studioRecipient: string;
+  configured: boolean;
+}
+
+let activeSmtpConfig: SmtpStoredConfig = {
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: Number(process.env.SMTP_PORT) || 465,
+  user: process.env.SMTP_USER || '',
+  pass: process.env.SMTP_PASS || '',
+  from: process.env.SMTP_FROM || 'CADSTUDIO Citas <notificaciones@cadstudio.mx>',
+  studioRecipient: 'cadcad111.3@gmail.com',
+  configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS),
+};
+
 const defaultSender = process.env.SMTP_FROM || 'CADSTUDIO Citas <notificaciones@cadstudio.mx>';
 
-if (smtpHost && smtpUser && smtpPass) {
-  mailTransporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
-  });
-  console.log(`[Email] Outbound SMTP transporter initialized (${smtpHost}:${smtpPort})`);
-} else {
-  // Built-in automated notification transporter with delivery logging & preview support
-  mailTransporter = nodemailer.createTransport({
-    jsonTransport: true,
-  });
-  console.log('[Email] Automated built-in notification transporter active (with live audit logging)');
+let mailTransporter: Transporter | null = null;
+
+// Try loading persisted custom Gmail / SMTP credentials from disk
+if (fs.existsSync(CONFIG_FILE)) {
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed.user && parsed.pass) {
+      activeSmtpConfig = { ...activeSmtpConfig, ...parsed, configured: true };
+      mailTransporter = nodemailer.createTransport({
+        host: activeSmtpConfig.host || 'smtp.gmail.com',
+        port: activeSmtpConfig.port || 465,
+        secure: activeSmtpConfig.port === 465,
+        auth: {
+          user: activeSmtpConfig.user,
+          pass: activeSmtpConfig.pass,
+        },
+      });
+      console.log(`[Email] Loaded custom Gmail/SMTP config for sender: ${activeSmtpConfig.user}`);
+    }
+  } catch (e) {
+    console.warn('[Email] Could not load persisted smtp-config.json:', e);
+  }
+}
+
+if (!mailTransporter) {
+  if (activeSmtpConfig.configured && activeSmtpConfig.user && activeSmtpConfig.pass) {
+    mailTransporter = nodemailer.createTransport({
+      host: activeSmtpConfig.host,
+      port: activeSmtpConfig.port,
+      secure: activeSmtpConfig.port === 465,
+      auth: {
+        user: activeSmtpConfig.user,
+        pass: activeSmtpConfig.pass,
+      },
+    });
+    console.log(`[Email] Outbound SMTP transporter initialized (${activeSmtpConfig.host}:${activeSmtpConfig.port})`);
+  } else {
+    // Built-in automated notification transporter with delivery logging & preview support
+    mailTransporter = nodemailer.createTransport({
+      jsonTransport: true,
+    });
+    console.log('[Email] Automated built-in notification transporter active (with live audit logging)');
+  }
 }
 
 interface ServerEmailNotification {
@@ -237,18 +282,19 @@ app.post('/api/send-booking-notification', async (req, res) => {
     }
 
     const clientTo = booking.clientEmail;
-    const studioTo = studioEmail;
+    const sender = activeSmtpConfig.from || (activeSmtpConfig.user ? `"CADSTUDIO" <${activeSmtpConfig.user}>` : defaultSender);
+    const studioTo = studioEmail || activeSmtpConfig.studioRecipient || 'cadcad111.3@gmail.com';
     const nowIso = new Date().toISOString();
     const notifId = `email-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     let previewUrl: string | undefined;
-    let deliveryMethod = smtpHost ? 'smtp' : 'built_in_delivery';
+    let deliveryMethod = activeSmtpConfig.configured ? 'smtp' : 'built_in_delivery';
 
     if (mailTransporter) {
       try {
         // 1. Send notification to Studio Admin
         await mailTransporter.sendMail({
-          from: defaultSender,
+          from: sender,
           to: studioTo,
           subject: studioSubject || `🔔 Nueva Reunión Agendada: ${booking.clientName} - CADSTUDIO`,
           html: studioHtml || `<p>Nueva cita con ${booking.clientName} (${booking.clientEmail}) el ${booking.date} a las ${booking.startTime}</p>`,
@@ -256,7 +302,7 @@ app.post('/api/send-booking-notification', async (req, res) => {
 
         // 2. Send confirmation to Client
         const clientInfo = await mailTransporter.sendMail({
-          from: defaultSender,
+          from: sender,
           to: clientTo,
           subject: clientSubject || `✓ Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO`,
           html: clientHtml || `<p>Hola ${booking.clientName}, tu cita ha sido agendada para el ${booking.date} a las ${booking.startTime}</p>`,
@@ -358,19 +404,20 @@ app.post('/api/resend-booking-notification', async (req, res) => {
     }
 
     const clientTo = recipientOverride || existing.clientEmail;
+    const sender = activeSmtpConfig.from || (activeSmtpConfig.user ? `"CADSTUDIO" <${activeSmtpConfig.user}>` : defaultSender);
     const studioTo = existing.studioEmail;
 
     if (mailTransporter) {
       try {
         await mailTransporter.sendMail({
-          from: defaultSender,
+          from: sender,
           to: studioTo,
           subject: `[REENVÍO] ${existing.studioSubject}`,
           html: existing.studioHtml,
         });
 
         await mailTransporter.sendMail({
-          from: defaultSender,
+          from: sender,
           to: clientTo,
           subject: `[REENVÍO] ${existing.clientSubject}`,
           html: existing.clientHtml,
@@ -390,18 +437,100 @@ app.post('/api/resend-booking-notification', async (req, res) => {
   }
 });
 
+// Endpoint to get current Gmail / SMTP configuration status
+app.get('/api/smtp-config', (_req, res) => {
+  return res.json({
+    configured: activeSmtpConfig.configured,
+    host: activeSmtpConfig.host,
+    port: activeSmtpConfig.port,
+    user: activeSmtpConfig.user,
+    from: activeSmtpConfig.from,
+    studioRecipient: activeSmtpConfig.studioRecipient,
+    isGmail: activeSmtpConfig.host.includes('gmail') || activeSmtpConfig.user.includes('@gmail.com'),
+  });
+});
+
+// Endpoint to update and test Gmail (otro correo) / SMTP configuration
+app.post('/api/smtp-config', async (req, res) => {
+  try {
+    const { host, port, user, pass, from, studioRecipient } = req.body;
+    if (!user || !pass) {
+      return res.status(400).json({ error: 'El correo de Gmail (otro correo) y la contraseña de aplicación de 16 caracteres son obligatorios.' });
+    }
+
+    const cleanPass = String(pass).replace(/\s+/g, '');
+    const cleanUser = String(user).trim();
+    const isGmail = cleanUser.includes('@gmail.com') || (host && host.includes('gmail'));
+    const resolvedHost = host?.trim() || (isGmail ? 'smtp.gmail.com' : 'smtp.gmail.com');
+    const resolvedPort = Number(port) || (resolvedHost === 'smtp.gmail.com' ? 465 : 587);
+    const resolvedFrom = from?.trim() || `"CADSTUDIO" <${cleanUser}>`;
+    const resolvedStudioRecipient = studioRecipient?.trim() || 'cadcad111.3@gmail.com';
+
+    const testTransporter = nodemailer.createTransport({
+      host: resolvedHost,
+      port: resolvedPort,
+      secure: resolvedPort === 465,
+      auth: {
+        user: cleanUser,
+        pass: cleanPass,
+      },
+    });
+
+    // Test credentials with SMTP verify
+    await testTransporter.verify();
+
+    // If verified successfully, activate
+    mailTransporter = testTransporter;
+    activeSmtpConfig = {
+      host: resolvedHost,
+      port: resolvedPort,
+      user: cleanUser,
+      pass: cleanPass,
+      from: resolvedFrom,
+      studioRecipient: resolvedStudioRecipient,
+      configured: true,
+    };
+
+    // Save to disk for persistence
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(activeSmtpConfig, null, 2), 'utf-8');
+
+    return res.json({
+      success: true,
+      message: `¡Gmail conectado con éxito para ${cleanUser}! Todos los correos de confirmación saldrán desde esta cuenta.`,
+      config: {
+        configured: true,
+        host: resolvedHost,
+        port: resolvedPort,
+        user: cleanUser,
+        from: resolvedFrom,
+        studioRecipient: resolvedStudioRecipient,
+        isGmail,
+      },
+    });
+  } catch (err: any) {
+    console.error('Error verifying Gmail/SMTP credentials:', err);
+    return res.status(400).json({
+      error: 'No se pudo conectar con Gmail. Verifique el correo y la contraseña de aplicación (16 caracteres).',
+      details: err?.message || 'Error de autenticación SMTP',
+    });
+  }
+});
+
 app.get('/api/email-notifications', (_req, res) => {
   return res.json({
     success: true,
     notifications: serverEmailLogs,
     count: serverEmailLogs.length,
-    smtpConfigured: !!(smtpHost && smtpUser && smtpPass),
+    smtpConfigured: activeSmtpConfig.configured,
+    activeSender: activeSmtpConfig.user || undefined,
+    studioRecipient: activeSmtpConfig.studioRecipient,
   });
 });
 
 app.post('/api/test-booking-email', async (req, res) => {
   try {
     const { targetEmail = 'cadcad111.3@gmail.com' } = req.body;
+    const sender = activeSmtpConfig.from || (activeSmtpConfig.user ? `"CADSTUDIO" <${activeSmtpConfig.user}>` : defaultSender);
     const sampleBooking = {
       id: `test-booking-${Date.now()}`,
       clientName: 'Cliente de Prueba',
