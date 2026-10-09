@@ -57,6 +57,10 @@ import {
   getEmailNotificationLogs,
 } from '../services/storageService';
 import {
+  isTuesdayDate,
+  isNextHourAfterDiscovery,
+} from '../services/googleCalendarService';
+import {
   generateStudioNotificationEmailHtml,
   generateClientConfirmationEmailHtml,
   resendBookingEmailNotification,
@@ -88,6 +92,7 @@ import {
   Lock,
   KeyRound,
   ExternalLink,
+  ChevronLeft,
   ChevronRight,
   Upload,
   Bot,
@@ -196,6 +201,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [testEmailStatus, setTestEmailStatus] = useState<string | null>(null);
   const [showEmailLogsDrawer, setShowEmailLogsDrawer] = useState<boolean>(false);
   const [resendingBookingId, setResendingBookingId] = useState<string | null>(null);
+
+  // INTERACTIVE AESTHETIC CALENDAR STATE FOR ADMIN
+  const [adminCalMonth, setAdminCalMonth] = useState<number>(new Date().getMonth());
+  const [adminCalYear, setAdminCalYear] = useState<number>(new Date().getFullYear());
+  const [adminCalSelectedDate, setAdminCalSelectedDate] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [adminCalendarTabMode, setAdminCalendarTabMode] = useState<'calendar' | 'cards'>('calendar');
 
   // RECHARTS CATEGORY CLICKS CHART STATE
   const [chartViewMode, setChartViewMode] = useState<'bar' | 'pie'>('bar');
@@ -3957,200 +3968,691 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            {discoveryBookings.length === 0 ? (
-              <div className="p-12 text-center rounded-2xl bg-[#121215] border border-zinc-800/80 space-y-3">
-                <div className="w-12 h-12 mx-auto rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
-                  <CalendarCheck className="w-6 h-6" />
-                </div>
-                <h3 className="font-display text-base font-bold text-white">
-                  No hay sesiones de descubrimiento agendadas aún
-                </h3>
-                <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
-                  Cuando los clientes seleccionen un horario disponible en el formulario de la página principal, sus citas se sincronizarán en tiempo real con Google Calendar y aparecerán aquí con sus enlaces de Google Meet.
-                </p>
+            {/* VIEW MODE SELECTOR & STATS BAR */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-2 rounded-2xl bg-[#121215] border border-zinc-800">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminCalendarTabMode('calendar')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    adminCalendarTabMode === 'calendar'
+                      ? 'bg-[#2B7574] text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Vista Calendario Mensual</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminCalendarTabMode('cards')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    adminCalendarTabMode === 'cards'
+                      ? 'bg-[#2B7574] text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>Vista Fichas de Citas ({discoveryBookings.length})</span>
+                </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {discoveryBookings.map((session) => (
-                  <div
-                    key={session.id}
-                    className="p-5 rounded-2xl bg-[#121215] border border-zinc-800 hover:border-zinc-700 transition-colors flex flex-col justify-between gap-4"
-                  >
-                    <div className="space-y-3">
-                      {/* Top badges */}
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full font-semibold uppercase ${
-                            session.meetingType === 'shoot_production'
-                              ? 'bg-amber-950 text-amber-300 border border-amber-800'
-                              : 'bg-blue-950 text-blue-300 border border-blue-800'
-                          }`}>
-                            {session.meetingType === 'shoot_production' ? '🎬 Programación de Sesión' : '📅 Descubrimiento'}
-                          </span>
-                          <span className="text-[10px] font-mono-data px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-semibold uppercase">
-                            {session.shootType}
-                          </span>
-                        </div>
 
-                        <span
-                          className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full border font-semibold ${
-                            session.status === 'confirmed'
-                              ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60'
-                              : session.status === 'cancelled'
-                              ? 'bg-rose-950/80 text-rose-300 border-rose-800'
-                              : 'bg-zinc-800 text-zinc-300 border-zinc-700'
-                          }`}
+              <div className="flex items-center gap-3 px-3 text-xs font-mono-data text-zinc-400">
+                <span>Total: <strong className="text-white">{discoveryBookings.length}</strong> sesiones agendadas</span>
+                <span>·</span>
+                <span className="text-emerald-400 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Google Calendar Activo
+                </span>
+              </div>
+            </div>
+
+            {/* TAB CONTENT: CALENDAR VIEW */}
+            {adminCalendarTabMode === 'calendar' && (() => {
+              const adminMonthNames = [
+                'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+              ];
+              const adminWeekdayHeaders = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+              const adminDaysInMonth = new Date(adminCalYear, adminCalMonth + 1, 0).getDate();
+              const adminFirstDayOfWeek = new Date(adminCalYear, adminCalMonth, 1).getDay();
+              const adminStartingOffset = (adminFirstDayOfWeek + 6) % 7;
+
+              const handleAdminPrevMonth = () => {
+                if (adminCalMonth === 0) {
+                  setAdminCalMonth(11);
+                  setAdminCalYear((y) => y - 1);
+                } else {
+                  setAdminCalMonth((m) => m - 1);
+                }
+              };
+
+              const handleAdminNextMonth = () => {
+                if (adminCalMonth === 11) {
+                  setAdminCalMonth(0);
+                  setAdminCalYear((y) => y + 1);
+                } else {
+                  setAdminCalMonth((m) => m + 1);
+                }
+              };
+
+              const formatAdminDateDisplay = (dateStr: string) => {
+                try {
+                  const [year, month, day] = dateStr.split('-').map(Number);
+                  const d = new Date(year, month - 1, day);
+                  return d.toLocaleDateString('es-MX', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  });
+                } catch {
+                  return dateStr;
+                }
+              };
+
+              const selectedDayBookings = discoveryBookings.filter((b) => b.date === adminCalSelectedDate);
+
+              return (
+                <div className="space-y-6">
+                  {/* Interactive Month Calendar Card */}
+                  <div className="p-6 rounded-3xl bg-[#121215] border border-zinc-800 space-y-5 shadow-xl relative overflow-hidden">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded-xl bg-[#2B7574]/20 border border-[#2B7574]/40 text-[#7cc0be]">
+                          <CalendarCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-mono-data tracking-widest text-[#7cc0be] font-bold uppercase block">
+                            AGENDA EJECUTIVA DEL ESTUDIO
+                          </span>
+                          <h3 className="font-display text-lg font-bold text-white">
+                            {adminMonthNames[adminCalMonth]} {adminCalYear}
+                          </h3>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const now = new Date();
+                            setAdminCalMonth(now.getMonth());
+                            setAdminCalYear(now.getFullYear());
+                            setAdminCalSelectedDate(now.toISOString().slice(0, 10));
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-xs font-mono-data text-zinc-300 font-bold transition-all cursor-pointer"
                         >
-                          {session.status === 'confirmed'
-                            ? '● Confirmada en Agenda'
-                            : session.status === 'cancelled'
-                            ? '✕ Cancelada'
-                            : 'Pendiente'}
-                        </span>
+                          Hoy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleAdminPrevMonth}
+                          className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 transition-all cursor-pointer"
+                          title="Mes anterior"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleAdminNextMonth}
+                          className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 transition-all cursor-pointer"
+                          title="Mes siguiente"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
-
-                      {/* Client Header */}
-                      <div>
-                        <h4 className="font-display text-base font-bold text-white">
-                          {session.clientName}
-                        </h4>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 mt-1 font-mono-data">
-                          <span>{session.clientEmail}</span>
-                          {session.clientPhone && <span>· {session.clientPhone}</span>}
-                        </div>
-                      </div>
-
-                      {/* Date & Time Slot */}
-                      <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-400 font-mono-data">FECHA:</span>
-                          <span className="font-semibold text-white">{session.date}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-400 font-mono-data">HORARIO:</span>
-                          <span className="font-semibold text-rose-400 font-mono-data">
-                            {session.startTime} - {session.endTime} (GMT-7 Culiacán)
-                          </span>
-                        </div>
-                        {session.productionType && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-zinc-400 font-mono-data">PRODUCCIÓN:</span>
-                            <span className="text-amber-300 font-medium font-mono-data text-[11px]">
-                              {session.productionType === 'photos'
-                                ? 'Solo Fotografía'
-                                : session.productionType === 'video'
-                                ? 'Solo Video'
-                                : 'Fotos & Video'}
-                            </span>
-                          </div>
-                        )}
-                        {session.location && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-zinc-400 font-mono-data">LOCACIÓN:</span>
-                            <span className="text-zinc-200 font-medium text-[11px] truncate max-w-[200px]">
-                              {session.location}
-                            </span>
-                          </div>
-                        )}
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-400 font-mono-data">MODALIDAD:</span>
-                          <span className="text-zinc-300 font-medium">
-                            {session.format === 'google_meet'
-                              ? 'Google Meet (Videollamada)'
-                              : session.format === 'in_person'
-                              ? 'Presencial / En Locación'
-                              : 'Llamada telefónica'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Automated Email Notification Status Strip */}
-                      <div className="p-2.5 rounded-xl bg-[#0E2931]/60 border border-[#2B7574]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-1.5 text-zinc-300 font-mono-data text-[11px]">
-                          <MailCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                          <span>Notificación automática enviada a cliente y a <strong className="text-white">cadcad111.3@gmail.com</strong></span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setSelectedEmailForPreview({
-                                title: `Email: ${session.clientName} (${session.meetingType === 'shoot_production' ? 'Sesión de Rodaje' : 'Descubrimiento'})`,
-                                recipient: session.clientEmail,
-                                subject: session.meetingType === 'shoot_production'
-                                  ? 'Confirmación de tu Sesión de Fotos/Video · CADSTUDIO'
-                                  : 'Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO',
-                                sentAt: session.createdAt,
-                                html: generateClientConfirmationEmailHtml(session, studioConfig),
-                              })
-                            }
-                            className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#12353f] hover:bg-[#1a4a58] text-[#7cc0be] border border-[#2B7574]/50 cursor-pointer transition-colors"
-                          >
-                            Ver Correo
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleResendBookingEmail(session)}
-                            disabled={resendingBookingId === session.id}
-                            className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#2B7574]/40 hover:bg-[#2B7574] text-white border border-[#2B7574] cursor-pointer transition-colors disabled:opacity-50"
-                          >
-                            {resendingBookingId === session.id ? 'Reenviando...' : 'Reenviar'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {session.notes && (
-                        <p className="text-xs text-zinc-400 italic bg-zinc-900/40 p-2.5 rounded-lg border border-zinc-800/60">
-                          "{session.notes}"
-                        </p>
-                      )}
                     </div>
 
-                    {/* Footer Actions */}
-                    <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        {session.meetLink && session.format === 'google_meet' && (
-                          <a
-                            href={session.meetLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+                    {/* Weekday Headers */}
+                    <div className="grid grid-cols-7 gap-2 text-center font-mono-data text-[11px] pb-2 border-b border-zinc-800/80">
+                      {adminWeekdayHeaders.map((w, index) => {
+                        const isWeekend = index === 5 || index === 6;
+                        return (
+                          <div
+                            key={w}
+                            className={`py-1.5 rounded-lg font-bold tracking-wider uppercase text-center ${
+                              isWeekend ? 'text-zinc-500 bg-zinc-900/40' : 'text-zinc-300 bg-zinc-900/80'
+                            }`}
                           >
-                            <Video className="w-3.5 h-3.5" />
-                            <span>Entrar a Google Meet</span>
-                          </a>
-                        )}
+                            <span>{w}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
 
-                        {session.htmlLink && (
-                          <a
-                            href={session.htmlLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors flex items-center gap-1"
-                            title="Ver evento en Google Calendar"
+                    {/* Month Days Grid */}
+                    <div className="grid grid-cols-7 gap-2">
+                      {/* Leading empty offsets */}
+                      {Array.from({ length: adminStartingOffset }).map((_, idx) => (
+                        <div key={`admin-empty-${idx}`} className="min-h-[85px] sm:min-h-[100px] rounded-2xl bg-zinc-950/30 border border-transparent" />
+                      ))}
+
+                      {/* Day cells */}
+                      {Array.from({ length: adminDaysInMonth }).map((_, idx) => {
+                        const dayNum = idx + 1;
+                        const tileDateStr = `${adminCalYear}-${String(adminCalMonth + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                        const tileDate = new Date(`${tileDateStr}T00:00:00`);
+                        const todayMidnight = new Date();
+                        todayMidnight.setHours(0, 0, 0, 0);
+
+                        const isToday = tileDate.getTime() === todayMidnight.getTime();
+                        const isSelected = adminCalSelectedDate === tileDateStr;
+                        const dayOfWeek = tileDate.getDay();
+                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                        // Bookings for this day
+                        const dayBookings = discoveryBookings.filter((b) => b.date === tileDateStr);
+
+                        return (
+                          <div
+                            key={tileDateStr}
+                            onClick={() => setAdminCalSelectedDate(tileDateStr)}
+                            className={`min-h-[85px] sm:min-h-[100px] rounded-2xl p-2 flex flex-col justify-between transition-all cursor-pointer border relative group ${
+                              isSelected
+                                ? 'bg-gradient-to-b from-[#0E2931] to-[#123842] border-[#2B7574] ring-2 ring-[#2B7574]/50 shadow-lg'
+                                : dayBookings.length > 0
+                                ? 'bg-zinc-900/90 hover:bg-zinc-800/90 border-[#2B7574]/40 hover:border-[#2B7574]'
+                                : isWeekend
+                                ? 'bg-zinc-950/60 border-zinc-900 text-zinc-600'
+                                : 'bg-zinc-900/40 hover:bg-zinc-900 border-zinc-800/80 hover:border-zinc-700'
+                            }`}
                           >
-                            <ExternalLink className="w-3 h-3" />
-                            <span>Ver en Calendar</span>
-                          </a>
-                        )}
-                      </div>
+                            <div className="flex items-center justify-between">
+                              <span className={`font-mono-data text-xs sm:text-sm font-bold ${
+                                isSelected
+                                  ? 'text-white'
+                                  : dayBookings.length > 0
+                                  ? 'text-emerald-300'
+                                  : 'text-zinc-400'
+                              }`}>
+                                {dayNum}
+                              </span>
 
-                      {session.clientPhone && (
-                        <a
-                          href={`https://wa.me/${session.clientPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
-                            `Hola ${session.clientName}, le saluda Mateo Valenzuela de CADSTUDIO respecto a nuestra sesión de descubrimiento agendada para el ${session.date} a las ${session.startTime}.`
-                          )}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/50 text-xs font-semibold transition-colors flex items-center gap-1"
-                        >
-                          <span>WhatsApp</span>
-                        </a>
-                      )}
+                              {isToday && (
+                                <span className="px-1.5 py-0.2 rounded text-[9px] font-mono-data bg-[#2B7574] text-white font-bold">
+                                  Hoy
+                                </span>
+                              )}
+
+                              {dayBookings.length > 0 && !isToday && (
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                              )}
+                            </div>
+
+                            {/* Bookings Pills */}
+                            <div className="space-y-1 mt-1 overflow-hidden">
+                              {dayBookings.slice(0, 2).map((b) => (
+                                <div
+                                  key={b.id}
+                                  className={`text-[10px] font-mono-data px-1.5 py-0.5 rounded truncate flex items-center gap-1 border ${
+                                    b.meetingType === 'shoot_production'
+                                      ? 'bg-amber-950/80 border-amber-800/60 text-amber-200'
+                                      : 'bg-blue-950/80 border-blue-800/60 text-blue-200'
+                                  }`}
+                                  title={`${b.startTime} - ${b.clientName}`}
+                                >
+                                  <span className="font-bold">{b.startTime}</span>
+                                  <span className="truncate">{b.clientName}</span>
+                                </div>
+                              ))}
+
+                              {dayBookings.length > 2 && (
+                                <span className="text-[9px] font-mono-data text-zinc-400 block text-right">
+                                  +{dayBookings.length - 2} más
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  {/* Selected Day Inspector Panel */}
+                  <div className="p-6 rounded-3xl bg-[#121215] border border-zinc-800 space-y-4 shadow-xl">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800">
+                      <div>
+                        <span className="text-[10px] font-mono-data tracking-widest text-[#7cc0be] font-bold uppercase block">
+                          DETALLE DEL DÍA SELECCIONADO
+                        </span>
+                        <h4 className="font-display text-base sm:text-lg font-bold text-white capitalize">
+                          {formatAdminDateDisplay(adminCalSelectedDate)}
+                        </h4>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                        {isTuesdayDate(adminCalSelectedDate) && (
+                          <span className="px-3 py-1 rounded-full text-xs font-mono-data font-bold bg-amber-950 text-amber-300 border border-amber-800 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-400" />
+                            Martes: Inicia a las 16:00 hrs
+                          </span>
+                        )}
+                        <span className={`px-3 py-1 rounded-full text-xs font-mono-data font-bold border ${
+                          selectedDayBookings.length > 0
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                            : 'bg-zinc-900 text-zinc-400 border-zinc-700'
+                        }`}>
+                          {selectedDayBookings.length === 1
+                            ? '1 cita programada'
+                            : selectedDayBookings.length > 1
+                            ? `${selectedDayBookings.length} citas programadas`
+                            : 'Sin citas en este día'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Schedule slots breakdown (14:00 to 18:00) */}
+                    <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs font-mono-data">
+                        <span className="text-zinc-400 font-bold uppercase tracking-wider text-[10px]">
+                          Disponibilidad por franja horaria:
+                        </span>
+                        {isTuesdayDate(adminCalSelectedDate) ? (
+                          <span className="text-amber-400 text-[11px] font-bold">
+                            Agenda de Martes: 16:00 a 18:00 hrs
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400 text-[11px]">
+                            Horario habitual: 14:00 a 18:00 hrs
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                        {['14:00', '15:00', '16:00', '17:00', '18:00'].map((timeSlot) => {
+                          const isTuesdaySlotBlocked = isTuesdayDate(adminCalSelectedDate) && timeSlot < '16:00';
+                          const bookedSession = selectedDayBookings.find((b) => b.startTime === timeSlot);
+                          const nextHourBuffer = isNextHourAfterDiscovery(selectedDayBookings, timeSlot);
+
+                          return (
+                            <div
+                              key={timeSlot}
+                              className={`p-2.5 rounded-xl border text-xs font-mono-data flex flex-col justify-between gap-1 ${
+                                isTuesdaySlotBlocked
+                                  ? 'bg-zinc-950/60 border-zinc-800/80 text-zinc-500'
+                                  : bookedSession
+                                  ? 'bg-emerald-950/40 border-emerald-800/70 text-emerald-200'
+                                  : nextHourBuffer.isBlocked
+                                  ? 'bg-amber-950/40 border-amber-800/70 text-amber-200'
+                                  : 'bg-zinc-900/40 border-zinc-800 text-zinc-300'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold">{timeSlot}</span>
+                                {bookedSession ? (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                ) : nextHourBuffer.isBlocked ? (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                                ) : isTuesdaySlotBlocked ? (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+                                ) : (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+                                )}
+                              </div>
+                              <span className="text-[10px] truncate leading-tight font-medium">
+                                {isTuesdaySlotBlocked
+                                  ? 'Inhábil (Martes)'
+                                  : bookedSession
+                                  ? `${bookedSession.clientName}`
+                                  : nextHourBuffer.isBlocked
+                                  ? 'Bloqueado (Margen)'
+                                  : 'Disponible'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {selectedDayBookings.length === 0 ? (
+                      <div className="py-8 text-center text-zinc-500 text-xs font-mono-data space-y-1">
+                        <Clock className="w-6 h-6 mx-auto text-zinc-600 mb-2" />
+                        <p>No hay sesiones ni reuniones programadas para esta fecha.</p>
+                        <p className="text-zinc-600 text-[11px]">
+                          {isTuesdayDate(adminCalSelectedDate)
+                            ? 'Los martes la agenda está abierta a partir de las 16:00 a 18:00 para nuevas reservaciones.'
+                            : 'Agenda abierta de 14:00 a 18:00 para nuevas reservaciones de clientes.'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {selectedDayBookings.map((session) => (
+                          <div
+                            key={session.id}
+                            className="p-5 rounded-2xl bg-zinc-900/90 border border-zinc-800 hover:border-[#2B7574]/60 transition-colors flex flex-col justify-between gap-4"
+                          >
+                            <div className="space-y-3">
+                              {/* Top badges */}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full font-semibold uppercase ${
+                                    session.meetingType === 'shoot_production'
+                                      ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                                      : 'bg-blue-950 text-blue-300 border border-blue-800'
+                                  }`}>
+                                    {session.meetingType === 'shoot_production' ? '🎬 Rodaje' : '📅 Descubrimiento'}
+                                  </span>
+                                  <span className="text-[10px] font-mono-data px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-semibold uppercase">
+                                    {session.shootType}
+                                  </span>
+                                </div>
+
+                                <span
+                                  className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full border font-semibold ${
+                                    session.status === 'confirmed'
+                                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60'
+                                      : session.status === 'cancelled'
+                                      ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                                      : 'bg-zinc-800 text-zinc-300 border-zinc-700'
+                                  }`}
+                                >
+                                  {session.status === 'confirmed'
+                                    ? '● Confirmada'
+                                    : session.status === 'cancelled'
+                                    ? '✕ Cancelada'
+                                    : 'Pendiente'}
+                                </span>
+                              </div>
+
+                              {/* Client Header */}
+                              <div>
+                                <h4 className="font-display text-base font-bold text-white">
+                                  {session.clientName}
+                                </h4>
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 mt-1 font-mono-data">
+                                  <span>{session.clientEmail}</span>
+                                  {session.clientPhone && <span>· {session.clientPhone}</span>}
+                                </div>
+                              </div>
+
+                              {/* Date & Time Slot */}
+                              <div className="p-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-zinc-400 font-mono-data">HORARIO:</span>
+                                  <span className="font-semibold text-emerald-400 font-mono-data">
+                                    {session.startTime} - {session.endTime} (Culiacán)
+                                  </span>
+                                </div>
+                                {session.productionType && (
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-zinc-400 font-mono-data">PRODUCCIÓN:</span>
+                                    <span className="text-amber-300 font-medium font-mono-data text-[11px]">
+                                      {session.productionType === 'photos'
+                                        ? 'Solo Fotografía'
+                                        : session.productionType === 'video'
+                                        ? 'Solo Video'
+                                        : 'Fotos & Video'}
+                                    </span>
+                                  </div>
+                                )}
+                                {session.location && (
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-zinc-400 font-mono-data">LOCACIÓN:</span>
+                                    <span className="text-zinc-200 font-medium text-[11px] truncate max-w-[200px]">
+                                      {session.location}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {session.notes && (
+                                <p className="text-xs text-zinc-400 italic bg-zinc-950/40 p-2.5 rounded-lg border border-zinc-800/60">
+                                  "{session.notes}"
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Footer Actions */}
+                            <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                {session.meetLink && session.format === 'google_meet' && (
+                                  <a
+                                    href={session.meetLink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+                                  >
+                                    <Video className="w-3.5 h-3.5" />
+                                    <span>Google Meet</span>
+                                  </a>
+                                )}
+
+                                {session.htmlLink && (
+                                  <a
+                                    href={session.htmlLink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors flex items-center gap-1"
+                                    title="Ver evento en Google Calendar"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                    <span>Calendar</span>
+                                  </a>
+                                )}
+                              </div>
+
+                              {session.clientPhone && (
+                                <a
+                                  href={`https://wa.me/${session.clientPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                                    `Hola ${session.clientName}, le saluda Mateo Valenzuela de CADSTUDIO respecto a nuestra sesión agendada para el ${session.date} a las ${session.startTime}.`
+                                  )}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/50 text-xs font-semibold transition-colors flex items-center gap-1"
+                                >
+                                  <span>WhatsApp</span>
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* TAB CONTENT: CARDS VIEW */}
+            {adminCalendarTabMode === 'cards' && (
+              <>
+                {discoveryBookings.length === 0 ? (
+                  <div className="p-12 text-center rounded-2xl bg-[#121215] border border-zinc-800/80 space-y-3">
+                    <div className="w-12 h-12 mx-auto rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                      <CalendarCheck className="w-6 h-6" />
+                    </div>
+                    <h3 className="font-display text-base font-bold text-white">
+                      No hay sesiones de descubrimiento agendadas aún
+                    </h3>
+                    <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+                      Cuando los clientes seleccionen un horario disponible en el formulario de la página principal, sus citas se sincronizarán en tiempo real con Google Calendar y aparecerán aquí con sus enlaces de Google Meet.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {discoveryBookings.map((session) => (
+                      <div
+                        key={session.id}
+                        className="p-5 rounded-2xl bg-[#121215] border border-zinc-800 hover:border-zinc-700 transition-colors flex flex-col justify-between gap-4"
+                      >
+                        <div className="space-y-3">
+                          {/* Top badges */}
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full font-semibold uppercase ${
+                                session.meetingType === 'shoot_production'
+                                  ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                                  : 'bg-blue-950 text-blue-300 border border-blue-800'
+                              }`}>
+                                {session.meetingType === 'shoot_production' ? '🎬 Programación de Sesión' : '📅 Descubrimiento'}
+                              </span>
+                              <span className="text-[10px] font-mono-data px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-semibold uppercase">
+                                {session.shootType}
+                              </span>
+                            </div>
+
+                            <span
+                              className={`text-[10px] font-mono-data px-2.5 py-0.5 rounded-full border font-semibold ${
+                                session.status === 'confirmed'
+                                  ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/60'
+                                  : session.status === 'cancelled'
+                                  ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                                  : 'bg-zinc-800 text-zinc-300 border-zinc-700'
+                              }`}
+                            >
+                              {session.status === 'confirmed'
+                                ? '● Confirmada en Agenda'
+                                : session.status === 'cancelled'
+                                ? '✕ Cancelada'
+                                : 'Pendiente'}
+                            </span>
+                          </div>
+
+                          {/* Client Header */}
+                          <div>
+                            <h4 className="font-display text-base font-bold text-white">
+                              {session.clientName}
+                            </h4>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 mt-1 font-mono-data">
+                              <span>{session.clientEmail}</span>
+                              {session.clientPhone && <span>· {session.clientPhone}</span>}
+                            </div>
+                          </div>
+
+                          {/* Date & Time Slot */}
+                          <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-400 font-mono-data">FECHA:</span>
+                              <span className="font-semibold text-white">{session.date}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-400 font-mono-data">HORARIO:</span>
+                              <span className="font-semibold text-rose-400 font-mono-data">
+                                {session.startTime} - {session.endTime} (GMT-7 Culiacán)
+                              </span>
+                            </div>
+                            {session.productionType && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-zinc-400 font-mono-data">PRODUCCIÓN:</span>
+                                <span className="text-amber-300 font-medium font-mono-data text-[11px]">
+                                  {session.productionType === 'photos'
+                                    ? 'Solo Fotografía'
+                                    : session.productionType === 'video'
+                                    ? 'Solo Video'
+                                    : 'Fotos & Video'}
+                                </span>
+                              </div>
+                            )}
+                            {session.location && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-zinc-400 font-mono-data">LOCACIÓN:</span>
+                                <span className="text-zinc-200 font-medium text-[11px] truncate max-w-[200px]">
+                                  {session.location}
+                                </span>
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-400 font-mono-data">MODALIDAD:</span>
+                              <span className="text-zinc-300 font-medium">
+                                {session.format === 'google_meet'
+                                  ? 'Google Meet (Videollamada)'
+                                  : session.format === 'in_person'
+                                  ? 'Presencial / En Locación'
+                                  : 'Llamada telefónica'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Automated Email Notification Status Strip */}
+                          <div className="p-2.5 rounded-xl bg-[#0E2931]/60 border border-[#2B7574]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                            <div className="flex items-center gap-1.5 text-zinc-300 font-mono-data text-[11px]">
+                              <MailCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span>Notificación automática enviada a cliente y a <strong className="text-white">cadcad111.3@gmail.com</strong></span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSelectedEmailForPreview({
+                                    title: `Email: ${session.clientName} (${session.meetingType === 'shoot_production' ? 'Sesión de Rodaje' : 'Descubrimiento'})`,
+                                    recipient: session.clientEmail,
+                                    subject: session.meetingType === 'shoot_production'
+                                      ? 'Confirmación de tu Sesión de Fotos/Video · CADSTUDIO'
+                                      : 'Confirmación de tu Reunión con Mateo Valenzuela · CADSTUDIO',
+                                    sentAt: session.createdAt,
+                                    html: generateClientConfirmationEmailHtml(session, studioConfig),
+                                  })
+                                }
+                                className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#12353f] hover:bg-[#1a4a58] text-[#7cc0be] border border-[#2B7574]/50 cursor-pointer transition-colors"
+                              >
+                                Ver Correo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleResendBookingEmail(session)}
+                                disabled={resendingBookingId === session.id}
+                                className="px-2.5 py-1 rounded-lg text-[10px] font-mono-data font-semibold bg-[#2B7574]/40 hover:bg-[#2B7574] text-white border border-[#2B7574] cursor-pointer transition-colors disabled:opacity-50"
+                              >
+                                {resendingBookingId === session.id ? 'Reenviando...' : 'Reenviar'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {session.notes && (
+                            <p className="text-xs text-zinc-400 italic bg-zinc-900/40 p-2.5 rounded-lg border border-zinc-800/60">
+                              "{session.notes}"
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Footer Actions */}
+                        <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            {session.meetLink && session.format === 'google_meet' && (
+                              <a
+                                href={session.meetLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-sm"
+                              >
+                                <Video className="w-3.5 h-3.5" />
+                                <span>Entrar a Google Meet</span>
+                              </a>
+                            )}
+
+                            {session.htmlLink && (
+                              <a
+                                href={session.htmlLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs transition-colors flex items-center gap-1"
+                                title="Ver evento en Google Calendar"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>Ver en Calendar</span>
+                              </a>
+                            )}
+                          </div>
+
+                          {session.clientPhone && (
+                            <a
+                              href={`https://wa.me/${session.clientPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                                `Hola ${session.clientName}, le saluda Mateo Valenzuela de CADSTUDIO respecto a nuestra sesión de descubrimiento agendada para el ${session.date} a las ${session.startTime}.`
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/50 text-xs font-semibold transition-colors flex items-center gap-1"
+                            >
+                              <span>WhatsApp</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

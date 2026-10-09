@@ -51,16 +51,20 @@ const authListeners: Array<(user: User | null, token: string | null) => void> = 
 export const requestTokenViaGIS = (scopes: string[]): Promise<{ user: User; accessToken: string }> => {
   return new Promise((resolve, reject) => {
     const oauthClientId = firebaseConfig.oAuthClientId;
-    const gis = (window as any).google?.accounts?.oauth2;
+    const combinedScopes = Array.from(new Set([...scopes, 'email', 'profile']));
 
-    const launchTokenClient = (oauth2: any) => {
+    const executeClient = (oauth2: any) => {
       try {
         const client = oauth2.initTokenClient({
           client_id: oauthClientId,
-          scope: scopes.join(' '),
+          scope: combinedScopes.join(' '),
           prompt: 'select_account',
           callback: async (resp: any) => {
             if (resp.error) {
+              if (resp.error === 'access_denied') {
+                reject(new Error('Acceso cancelado por el usuario.'));
+                return;
+              }
               reject(new Error(resp.error_description || resp.error));
               return;
             }
@@ -89,7 +93,7 @@ export const requestTokenViaGIS = (scopes: string[]): Promise<{ user: User; acce
             }
 
             const mockUser: User = {
-              uid: `gis-${email}`,
+              uid: `google-${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
               email,
               displayName,
               photoURL,
@@ -118,23 +122,24 @@ export const requestTokenViaGIS = (scopes: string[]): Promise<{ user: User; acce
       }
     };
 
-    if (!gis) {
-      let attempts = 0;
-      const interval = setInterval(() => {
-        attempts++;
-        const readyGis = (window as any).google?.accounts?.oauth2;
-        if (readyGis) {
-          clearInterval(interval);
-          launchTokenClient(readyGis);
-        } else if (attempts > 15) {
-          clearInterval(interval);
-          reject(new Error('Google Identity Services aún se está inicializando. Por favor intente en un segundo.'));
-        }
-      }, 200);
+    const readyGis = (window as any).google?.accounts?.oauth2;
+    if (readyGis) {
+      executeClient(readyGis);
       return;
     }
 
-    launchTokenClient(gis);
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts++;
+      const currentGis = (window as any).google?.accounts?.oauth2;
+      if (currentGis) {
+        clearInterval(interval);
+        executeClient(currentGis);
+      } else if (attempts > 20) {
+        clearInterval(interval);
+        reject(new Error('Google Identity Services aún se está inicializando. Por favor intente en un segundo.'));
+      }
+    }, 200);
   });
 };
 
@@ -171,7 +176,7 @@ export const initDriveAuth = (
   });
 };
 
-// Sign in with Google to authorize Google Drive (Supports Firebase Auth + GIS Fallback for unauthorized-domain)
+// Sign in with Google to authorize Google Drive (Supports Firebase Auth + GIS Direct for unauthorized-domain)
 export const signInWithGoogleDrive = async (): Promise<{
   user: User;
   accessToken: string;
@@ -181,36 +186,55 @@ export const signInWithGoogleDrive = async (): Promise<{
     let resUser: User;
     let token: string;
 
-    // Check if GIS is available to bypass domain restrictions seamlessly
-    const gisAvailable = !!(window as any).google?.accounts?.oauth2;
+    const isCloudOrDev = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+    const gisAvailable = typeof window !== 'undefined' && !!(window as any).google?.accounts?.oauth2;
 
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (!credential?.accessToken) {
-        throw new Error('No se pudo obtener el token de acceso de Google Drive.');
-      }
-      resUser = result.user;
-      token = credential.accessToken;
-    } catch (popupErr: any) {
-      const errCode = popupErr?.code || '';
-      const errMsg = popupErr?.message || '';
-
-      // If domain is unauthorized in Firebase Console, use Google Identity Services directly
-      if (
-        errCode === 'auth/unauthorized-domain' ||
-        errCode === 'auth/popup-blocked' ||
-        errMsg.includes('unauthorized-domain') ||
-        gisAvailable
-      ) {
-        console.info('[GoogleDrive] Delegando autorización a Google Identity Services (GIS) para saltar restricción de dominio...');
+    if (gisAvailable || isCloudOrDev) {
+      try {
+        console.info('[GoogleDrive] Autenticando directamente con Google OAuth (GIS)...');
         const gisRes = await requestTokenViaGIS(SCOPES);
         resUser = gisRes.user;
         token = gisRes.accessToken;
-      } else if (errCode === 'auth/popup-closed-by-user') {
-        throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
-      } else {
-        throw popupErr;
+      } catch (gisErr: any) {
+        if (gisErr?.message?.includes('cancelado') || gisErr?.message?.includes('closed')) {
+          throw gisErr;
+        }
+        console.warn('[GoogleDrive] GIS error, probando Firebase popup:', gisErr);
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential?.accessToken) {
+          throw new Error('No se pudo obtener el token de acceso de Google Drive.');
+        }
+        resUser = result.user;
+        token = credential.accessToken;
+      }
+    } else {
+      try {
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential?.accessToken) {
+          throw new Error('No se pudo obtener el token de acceso de Google Drive.');
+        }
+        resUser = result.user;
+        token = credential.accessToken;
+      } catch (popupErr: any) {
+        const errCode = popupErr?.code || '';
+        const errMsg = popupErr?.message || '';
+
+        if (
+          errCode === 'auth/unauthorized-domain' ||
+          errCode === 'auth/popup-blocked' ||
+          errMsg.includes('unauthorized-domain')
+        ) {
+          console.info('[GoogleDrive] Delegando a Google Identity Services por restricción de dominio...');
+          const gisRes = await requestTokenViaGIS(SCOPES);
+          resUser = gisRes.user;
+          token = gisRes.accessToken;
+        } else if (errCode === 'auth/popup-closed-by-user') {
+          throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
+        } else {
+          throw popupErr;
+        }
       }
     }
 

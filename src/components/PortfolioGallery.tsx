@@ -254,7 +254,7 @@ export const PortfolioGallery: React.FC<PortfolioGalleryProps> = ({
               <ArrowRight className="w-4 h-4 text-[#E2E2E0] group-hover:translate-x-1.5 transition-transform" />
             </button>
             <p className="text-xs text-zinc-400 mt-2.5 font-mono-data">
-              Ver galería ampliada por categorías con opción de gestionar fotos de portada
+              Ver galería ampliada organizada por especialidades y series visuales
             </p>
           </div>
         )}

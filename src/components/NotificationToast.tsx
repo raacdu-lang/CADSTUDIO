@@ -45,19 +45,22 @@ export const NotificationToast: React.FC = () => {
         return (
           <div
             key={n.id}
-            className="pointer-events-auto bg-[#0E2931]/95 backdrop-blur-md border border-[#2B7574]/60 shadow-2xl rounded-xl p-3.5 flex items-start gap-3 transition-all animate-in fade-in slide-in-from-bottom-3 duration-300"
+            className="pointer-events-auto bg-[#0E2931]/95 backdrop-blur-md border border-[#2B7574]/70 shadow-2xl rounded-2xl p-4 flex items-start gap-3.5 transition-all animate-in fade-in slide-in-from-bottom-3 duration-300"
           >
-            <div className="p-2 rounded-lg bg-[#070e11] border border-[#2B7574]/40 shrink-0 mt-0.5">
+            <div className="p-2.5 rounded-xl bg-[#070e11] border border-[#2B7574]/40 shrink-0 mt-0.5">
               {getIcon()}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-1 mb-0.5">
-                <span className="text-xs font-semibold text-[#E2E2E0] tracking-wide truncate">
-                  {n.title}
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono-data bg-[#2B7574]/30 text-emerald-300 border border-[#2B7574]/50 font-bold uppercase tracking-wider">
+                  Admin Monitor
                 </span>
-                <span className="text-[10px] text-zinc-400 font-mono-data shrink-0">
+                <span className="text-[10px] text-zinc-400 font-mono-data shrink-0 ml-auto">
                   {n.timestamp}
                 </span>
+              </div>
+              <div className="text-xs font-semibold text-[#E2E2E0] tracking-wide truncate mb-0.5">
+                {n.title}
               </div>
               <p className="text-xs text-zinc-300 line-clamp-2 leading-relaxed">
                 {n.description}
@@ -65,7 +68,7 @@ export const NotificationToast: React.FC = () => {
             </div>
             <button
               onClick={() => dismiss(n.id)}
-              className="text-zinc-400 hover:text-white p-1 rounded-md transition-colors shrink-0"
+              className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors shrink-0"
               aria-label="Cerrar notificación"
             >
               <X className="w-3.5 h-3.5" />

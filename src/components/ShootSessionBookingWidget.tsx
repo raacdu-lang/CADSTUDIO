@@ -13,7 +13,10 @@ import {
   initCalendarAuth,
   STUDIO_TIMEZONE,
   fetchGoogleCalendarEventsForDay,
+  isTuesdayDate,
+  isNextHourAfterDiscovery,
 } from '../services/googleCalendarService';
+import { getDiscoveryBookings } from '../services/storageService';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -75,10 +78,38 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
   const [dayEventsCount, setDayEventsCount] = useState<number>(0);
   const [isCheckingDay, setIsCheckingDay] = useState<boolean>(false);
 
-  // Time proposed by client (14:00 to 18:00)
-  const [proposedTime, setProposedTime] = useState<string>('14:00');
+  // Tuesday rule & local bookings state
+  const isTuesday = isTuesdayDate(selectedDate);
+  const [dayBookings, setDayBookings] = useState<DiscoverySessionBooking[]>(() => {
+    try {
+      return getDiscoveryBookings().filter((b) => b.status !== 'cancelled');
+    } catch {
+      return [];
+    }
+  });
+
+  // Time proposed by client (14:00 to 18:00, on Tuesdays starts from 16:00 / 4:00 PM)
+  const [proposedTime, setProposedTime] = useState<string>(() => {
+    return isTuesdayDate(getInitialDate()) ? '16:00' : '14:00';
+  });
   const [durationHours, setDurationHours] = useState<number>(1); // default 1 hora
   const [customTimeNotes, setCustomTimeNotes] = useState<string>('');
+
+  const refreshDayBookings = (dateStr: string) => {
+    try {
+      const all = getDiscoveryBookings();
+      setDayBookings(all.filter((b) => b.date === dateStr && b.status !== 'cancelled'));
+    } catch {
+      setDayBookings([]);
+    }
+  };
+
+  useEffect(() => {
+    refreshDayBookings(selectedDate);
+    if (isTuesdayDate(selectedDate) && proposedTime < '16:00') {
+      setProposedTime('16:00');
+    }
+  }, [selectedDate]);
 
   // Production Shoot Form State
   const [clientName, setClientName] = useState<string>('');
@@ -234,6 +265,30 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
       return;
     }
 
+    // Regla de los martes: las sesiones empiezan desde las 4 de la tarde (16:00)
+    if (selDate.getDay() === 2 && proposedTime < '16:00') {
+      setBookingError('Los martes las sesiones inician a partir de las 4:00 de la tarde (16:00 hrs). Por favor elija un horario entre 16:00 y 18:00.');
+      return;
+    }
+
+    // Comprobar conflicto de reservación directa
+    const currentDayBookings = getDiscoveryBookings().filter(
+      (b) => b.date === selectedDate && b.status !== 'cancelled'
+    );
+    if (currentDayBookings.some((b) => b.startTime === proposedTime)) {
+      setBookingError('Este horario ya ha sido reservado. Por favor seleccione otro horario disponible.');
+      return;
+    }
+
+    // Regla: si proponen una sesión de descubrimiento, la siguiente hora aparece ocupada
+    const nextHourCheck = isNextHourAfterDiscovery(currentDayBookings, proposedTime);
+    if (nextHourCheck.isBlocked) {
+      setBookingError(
+        `Este horario aparece ocupado: la siguiente hora tras una sesión de descubrimiento (de las ${nextHourCheck.priorTime || 'hora anterior'}) se mantiene reservada. Por favor elija otro horario.`
+      );
+      return;
+    }
+
     if (!shootLocation.trim()) {
       setBookingError('Por favor indique la locación prevista o dirección deseada para el rodaje.');
       return;
@@ -271,6 +326,7 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
       });
 
       setConfirmedBooking(booking);
+      refreshDayBookings(selectedDate);
 
       confetti({
         particleCount: 100,
@@ -584,25 +640,51 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
         /* Booking Flow */
         <div className="space-y-6">
           {/* STEP 1: Calendar Grid */}
-          <div className="p-5 rounded-2xl bg-white border border-[#2B7574]/30 space-y-4 shadow-sm text-[#0E2931]">
-            <div className="flex items-center justify-between pb-3 border-b border-[#2B7574]/20">
-              <div className="flex items-center gap-2">
-                <CalendarIcon className="w-4 h-4 text-[#2B7574]" />
-                <h3 className="font-display text-sm sm:text-base font-bold text-[#0E2931] uppercase tracking-wide">
-                  1. SELECCIONA EL DÍA PARA TU SESIÓN (LUNES A VIERNES)
-                </h3>
+          <div className="p-6 sm:p-7 rounded-3xl bg-white border border-[#2B7574]/25 space-y-5 shadow-lg text-[#0E2931] relative overflow-hidden">
+            {/* Ambient luxury glow */}
+            <div className="pointer-events-none absolute -top-24 -right-24 w-60 h-60 rounded-full bg-[#2B7574]/5 blur-3xl" />
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#2B7574]/20 relative z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-[#2B7574]/15 border border-[#2B7574]/30 text-[#2B7574]">
+                  <CalendarIcon className="w-4 h-4 text-[#2B7574]" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono-data tracking-widest text-[#2B7574] font-bold uppercase block">
+                    AGENDA DE PRODUCCIÓN & RODAJE
+                  </span>
+                  <h3 className="font-display text-sm sm:text-base font-bold text-[#0E2931] tracking-wide">
+                    1. Selecciona el Día para tu Sesión (Lun a Vie)
+                  </h3>
+                </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono-data text-[#0E2931] font-bold">
-                  {monthNames[currentMonth]} {currentYear}
-                </span>
+              {/* Month Selector Cluster */}
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <div className="px-3.5 py-1.5 rounded-xl bg-[#E2E2E0]/40 border border-[#2B7574]/30 flex items-center gap-2">
+                  <span className="text-xs font-mono-data text-[#0E2931] font-bold tracking-wider uppercase">
+                    {monthNames[currentMonth]} {currentYear}
+                  </span>
+                </div>
 
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setCurrentMonth(now.getMonth());
+                      setCurrentYear(now.getFullYear());
+                      setSelectedDate(getInitialDate());
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-[#2B7574]/15 border border-[#2B7574]/30 text-[11px] font-mono-data font-bold text-[#0E2931] transition-all shadow-2xs"
+                    title="Ir al mes actual"
+                  >
+                    Hoy
+                  </button>
+                  <button
+                    type="button"
                     onClick={handlePrevMonth}
-                    className="p-1.5 rounded-lg bg-[#E2E2E0]/50 hover:bg-[#2B7574]/20 border border-[#2B7574]/30 text-[#0E2931] transition-colors"
+                    className="p-1.5 rounded-xl bg-white hover:bg-[#2B7574]/20 border border-[#2B7574]/30 text-[#0E2931] transition-all shadow-2xs cursor-pointer"
                     title="Mes anterior"
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -610,7 +692,7 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
                   <button
                     type="button"
                     onClick={handleNextMonth}
-                    className="p-1.5 rounded-lg bg-[#E2E2E0]/50 hover:bg-[#2B7574]/20 border border-[#2B7574]/30 text-[#0E2931] transition-colors"
+                    className="p-1.5 rounded-xl bg-white hover:bg-[#2B7574]/20 border border-[#2B7574]/30 text-[#0E2931] transition-all shadow-2xs cursor-pointer"
                     title="Mes siguiente"
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -620,23 +702,27 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
             </div>
 
             {/* Weekday Header */}
-            <div className="grid grid-cols-7 gap-1 text-center font-mono-data text-[11px] text-[#0E2931] font-bold pb-1">
-              {weekdayHeaders.map((w, index) => (
-                <div
-                  key={w}
-                  className={`py-1 font-bold ${
-                    index === 5 || index === 6 ? 'text-zinc-400' : 'text-[#0E2931]'
-                  }`}
-                >
-                  {w} {index === 5 || index === 6 ? '(Inhábil)' : ''}
-                </div>
-              ))}
+            <div className="grid grid-cols-7 gap-1.5 text-center font-mono-data text-[11px] pb-1 border-b border-stone-100">
+              {weekdayHeaders.map((w, index) => {
+                const isWeekend = index === 5 || index === 6;
+                return (
+                  <div
+                    key={w}
+                    className={`py-1.5 rounded-lg font-bold tracking-wider uppercase text-center ${
+                      isWeekend ? 'text-zinc-400 bg-stone-100/50' : 'text-[#0E2931] bg-stone-50'
+                    }`}
+                  >
+                    <span>{w}</span>
+                    {isWeekend && <span className="block text-[8px] text-zinc-400 font-normal">Cerrado</span>}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Days Grid */}
-            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2 relative z-10">
               {Array.from({ length: startingOffset }).map((_, idx) => (
-                <div key={`empty-${idx}`} className="h-10 sm:h-12 rounded-xl bg-transparent" />
+                <div key={`empty-${idx}`} className="h-12 sm:h-14 rounded-2xl bg-stone-50/30 border border-transparent" />
               ))}
 
               {Array.from({ length: daysInMonth }).map((_, idx) => {
@@ -661,14 +747,14 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
                     type="button"
                     disabled={!isAvailable}
                     onClick={() => setSelectedDate(tileDateStr)}
-                    className={`h-11 sm:h-12 rounded-xl flex flex-col items-center justify-center transition-all relative border text-xs ${
+                    className={`h-12 sm:h-14 rounded-2xl flex flex-col items-center justify-center transition-all relative border text-xs group cursor-pointer ${
                       isSelected
-                        ? 'bg-[#2B7574] border-[#0E2931] text-white shadow-md font-bold scale-[1.02]'
+                        ? 'bg-gradient-to-br from-[#2B7574] to-[#1e5857] border-[#0E2931] text-white shadow-lg ring-2 ring-[#2B7574]/40 scale-[1.03] z-10'
                         : isAvailable
-                        ? 'bg-white hover:bg-[#2B7574]/15 border-[#2B7574]/40 text-[#0E2931] font-semibold'
+                        ? 'bg-white hover:bg-[#2B7574]/8 border-stone-200 hover:border-[#2B7574] text-[#0E2931] shadow-2xs hover:shadow-md hover:-translate-y-0.5'
                         : isWeekend
-                        ? 'bg-zinc-100 border-zinc-200 text-zinc-400 cursor-not-allowed opacity-50'
-                        : 'bg-zinc-100/50 border-zinc-200/60 text-zinc-400 cursor-not-allowed opacity-40'
+                        ? 'bg-stone-100/70 border-stone-200/50 text-zinc-400 cursor-not-allowed opacity-60'
+                        : 'bg-stone-100/40 border-stone-200/40 text-zinc-400 cursor-not-allowed opacity-40'
                     }`}
                     title={
                       isWeekend
@@ -678,8 +764,18 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
                         : `Asignar ${tileDateStr}`
                     }
                   >
-                    <span className="font-mono-data leading-none font-bold">{dayNum}</span>
-                    <span className="text-[9px] mt-0.5 leading-none font-mono-data">
+                    <span className={`font-mono-data leading-none font-bold text-sm ${isSelected ? 'text-white' : 'text-[#0E2931]'}`}>
+                      {dayNum}
+                    </span>
+                    <span className={`text-[8px] sm:text-[9px] mt-1 leading-none font-mono-data uppercase tracking-tight ${
+                      isSelected
+                        ? 'text-emerald-200 font-bold'
+                        : isWeekend
+                        ? 'text-zinc-400'
+                        : isPast
+                        ? 'text-zinc-400'
+                        : 'text-[#2B7574] font-semibold group-hover:text-[#2B7574]'
+                    }`}>
                       {isSelected
                         ? 'Elegido'
                         : isWeekend
@@ -689,7 +785,7 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
                         : 'Abierto'}
                     </span>
                     {isToday && !isSelected && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#2B7574] absolute bottom-1" />
+                      <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-[#2B7574] ring-2 ring-white" title="Hoy" />
                     )}
                   </button>
                 );
@@ -697,22 +793,40 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
             </div>
 
             {/* Selected Day Status */}
-            <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-[#2B7574]/20 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-mono-data text-[#0E2931] font-bold">DÍA DE RODAJE:</span>
-                <span className="font-bold text-[#2B7574] capitalize text-sm">
-                  {formatDateDisplay(selectedDate)}
-                </span>
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-stone-50 via-white to-stone-50 border border-[#2B7574]/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs relative z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#2B7574] text-white flex flex-col items-center justify-center font-mono-data shrink-0 shadow-sm">
+                  <span className="text-[9px] uppercase leading-none text-emerald-200">
+                    DÍA
+                  </span>
+                  <span className="text-base font-black leading-none mt-0.5">
+                    {selectedDate.split('-')[2]}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono-data text-zinc-500 uppercase font-bold tracking-wider block">
+                    DÍA DE RODAJE ASIGNADO:
+                  </span>
+                  <span className="font-bold text-[#0E2931] capitalize text-sm sm:text-base">
+                    {formatDateDisplay(selectedDate)}
+                  </span>
+                </div>
               </div>
 
               {isCheckingDay ? (
-                <span className="text-[11px] font-mono-data text-zinc-500 flex items-center gap-1.5">
-                  <Loader2 className="w-3 h-3 animate-spin text-[#2B7574]" />
+                <span className="text-[11px] font-mono-data text-zinc-500 flex items-center gap-1.5 self-start sm:self-auto bg-stone-100 px-3 py-1.5 rounded-xl border border-stone-200">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2B7574]" />
                   <span>Comprobando agenda del equipo...</span>
                 </span>
+              ) : isGoogleConnected ? (
+                <span className="text-[11px] font-mono-data text-emerald-800 font-semibold flex items-center gap-1.5 self-start sm:self-auto bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200 shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Agenda de rodaje sincronizada con Google Calendar</span>
+                </span>
               ) : (
-                <span className="text-[11px] font-mono-data text-[#0E2931]/80 font-medium">
-                  Agenda abierta de 14:00 a 18:00 para producciones
+                <span className="text-[11px] font-mono-data text-[#0E2931] font-semibold flex items-center gap-1.5 self-start sm:self-auto bg-[#2B7574]/10 px-3 py-1.5 rounded-xl border border-[#2B7574]/20">
+                  <Clock className="w-3.5 h-3.5 text-[#2B7574]" />
+                  <span>Agenda abierta de 14:00 a 18:00 para producciones</span>
                 </span>
               )}
             </div>
@@ -721,10 +835,10 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
           {/* STEP 2: Production Type & Shoot Configuration */}
           <form
             onSubmit={handleSubmitBooking}
-            className="p-5 sm:p-6 rounded-2xl bg-white border border-[#2B7574]/30 space-y-5 shadow-sm text-[#0E2931]"
+            className="p-6 sm:p-7 rounded-3xl bg-white border border-[#2B7574]/25 space-y-6 shadow-lg text-[#0E2931]"
           >
             {bookingError && (
-              <div className="p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex items-center gap-2 font-medium">
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-300 text-rose-800 text-xs flex items-center gap-2.5 font-medium shadow-2xs">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
                 <span>{bookingError}</span>
               </div>
@@ -793,70 +907,158 @@ export const ShootSessionBookingWidget: React.FC<ShootSessionBookingWidgetProps>
               </div>
             </div>
 
-            {/* Time and Duration selection (14:00 to 18:00) */}
-            <div className="space-y-3 pb-4 border-b border-[#2B7574]/20">
+            {/* Time and Duration selection */}
+            <div className="space-y-4 pb-5 border-b border-[#2B7574]/20">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="block text-xs font-mono-data text-[#061418] uppercase tracking-wider font-black">
-                  3. HORARIO DE INICIO (14:00 A 18:00) Y DURACIÓN:
-                </label>
+                <div>
+                  <span className="text-[10px] font-mono-data tracking-widest text-[#2B7574] font-bold uppercase block">
+                    ITINERARIO DE RODAJE
+                  </span>
+                  <label className="block text-xs font-mono-data text-[#061418] uppercase tracking-wider font-black">
+                    3. HORARIO DE INICIO {isTuesday ? '(MARTES: 16:00 A 18:00)' : '(14:00 A 18:00)'} Y DURACIÓN:
+                  </label>
+                </div>
                 <div className="flex items-center gap-2">
+                  {isTuesday && (
+                    <span className="text-[10px] font-mono-data text-amber-800 font-bold px-2 py-0.5 rounded-lg bg-amber-100 border border-amber-300">
+                      Martes desde 16:00 hrs
+                    </span>
+                  )}
                   <span className="text-[11px] font-mono-data text-[#061418] font-bold">
-                    Duración estimada:
+                    Duración:
                   </span>
                   <select
                     value={durationHours}
                     onChange={(e) => setDurationHours(Number(e.target.value))}
-                    className="px-2 py-1 text-xs font-bold rounded-lg bg-[#E2E2E0]/50 border border-[#2B7574]/40 text-[#0E2931]"
+                    className="px-3 py-1.5 text-xs font-bold rounded-xl bg-stone-50 border border-stone-300 text-[#0E2931] shadow-2xs focus:outline-none focus:border-[#2B7574]"
                   >
-                    <option value={1}>1 hora</option>
-                    <option value={2}>2 horas</option>
-                    <option value={3}>3 horas</option>
+                    <option value={1}>1 hora de rodaje</option>
+                    <option value={2}>2 horas de rodaje</option>
+                    <option value={3}>3 horas de rodaje</option>
                     <option value={4}>4 horas (Media jornada)</option>
                   </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                <div className="sm:col-span-5">
-                  <div className="flex items-center gap-2 bg-[#E2E2E0]/40 border-2 border-[#2B7574]/40 rounded-xl px-3.5 py-2.5 focus-within:border-[#2B7574]">
-                    <Clock className="w-4 h-4 text-[#2B7574] shrink-0" />
-                    <input
-                      type="time"
-                      required
-                      min="14:00"
-                      max="18:00"
-                      value={proposedTime}
-                      onChange={(e) => setProposedTime(e.target.value)}
-                      className="bg-transparent text-[#0E2931] font-mono-data text-sm font-bold w-full focus:outline-none"
-                    />
+              {/* Banners for Tuesday & buffer */}
+              {isTuesday && (
+                <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5 font-mono-data shadow-2xs">
+                  <Clock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">Horario especial de Martes:</span>
+                    <span className="text-amber-800 text-[11px]">
+                      Los días martes las sesiones inician a partir de las 4:00 de la tarde (16:00 a 18:00 hrs).
+                    </span>
                   </div>
                 </div>
+              )}
 
-                <div className="sm:col-span-7 flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-mono-data text-[#0E2931] font-bold mr-1 hidden lg:inline">
-                    Horas de inicio:
-                  </span>
-                  {[
-                    { label: '14:00 (2 PM)', time: '14:00' },
-                    { label: '15:00 (3 PM)', time: '15:00' },
-                    { label: '16:00 (4 PM)', time: '16:00' },
-                    { label: '17:00 (5 PM)', time: '17:00' },
-                    { label: '18:00 (6 PM)', time: '18:00' },
-                  ].map((chip) => (
+              {dayBookings.length > 0 && (
+                <div className="p-3 rounded-2xl bg-stone-50 border border-stone-200 text-zinc-700 text-xs flex items-start gap-2.5 font-mono-data shadow-2xs">
+                  <Clock className="w-4 h-4 text-[#2B7574] shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-[#0E2931] block">Margen técnico activo:</span>
+                    <span className="text-zinc-600 text-[11px]">
+                      La siguiente hora tras una sesión de descubrimiento previa se encuentra ocupada para preparar el equipo del estudio.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Aesthetic Interactive Time Slot Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+                {[
+                  { label: '14:00 hrs', time: '14:00', desc: '2:00 PM' },
+                  { label: '15:00 hrs', time: '15:00', desc: '3:00 PM' },
+                  { label: '16:00 hrs', time: '16:00', desc: '4:00 PM' },
+                  { label: '17:00 hrs', time: '17:00', desc: '5:00 PM' },
+                  { label: '18:00 hrs', time: '18:00', desc: '6:00 PM' },
+                ].map((slot) => {
+                  const isSelectedSlot = proposedTime === slot.time;
+                  const isTuesdayRestricted = isTuesday && slot.time < '16:00';
+                  const bookedDirectly = dayBookings.find((b) => b.startTime === slot.time);
+                  const nextHourCheck = isNextHourAfterDiscovery(dayBookings, slot.time);
+                  const isNextHourBlocked = nextHourCheck.isBlocked;
+                  const isUnavailable = isTuesdayRestricted || !!bookedDirectly || isNextHourBlocked;
+
+                  return (
                     <button
-                      key={chip.time}
+                      key={slot.time}
                       type="button"
-                      onClick={() => setProposedTime(chip.time)}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs font-mono-data transition-all border ${
-                        proposedTime === chip.time
-                          ? 'bg-[#2B7574] text-white border-[#2B7574] font-bold shadow-xs'
-                          : 'bg-white hover:bg-[#2B7574]/10 border-[#2B7574]/30 text-[#0E2931] font-semibold'
+                      disabled={isUnavailable}
+                      onClick={() => !isUnavailable && setProposedTime(slot.time)}
+                      title={
+                        isTuesdayRestricted
+                          ? 'Los martes las sesiones inician a partir de las 4:00 PM (16:00 hrs)'
+                          : bookedDirectly
+                          ? 'Horario ya reservado'
+                          : isNextHourBlocked
+                          ? `Ocupado: siguiente hora tras sesión previa (de las ${nextHourCheck.priorTime || 'hora anterior'})`
+                          : `Seleccionar ${slot.label}`
+                      }
+                      className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center relative ${
+                        isTuesdayRestricted
+                          ? 'bg-stone-100/70 border-stone-200 text-zinc-400 cursor-not-allowed opacity-55'
+                          : bookedDirectly
+                          ? 'bg-rose-50/70 border-rose-200 text-rose-700/80 cursor-not-allowed opacity-60'
+                          : isNextHourBlocked
+                          ? 'bg-amber-50/70 border-amber-200 text-amber-800/90 cursor-not-allowed opacity-75'
+                          : isSelectedSlot
+                          ? 'bg-gradient-to-br from-[#2B7574] to-[#1e5857] border-[#0E2931] text-white shadow-md ring-2 ring-[#2B7574]/30 scale-[1.02] cursor-pointer'
+                          : 'bg-stone-50 hover:bg-white border-stone-200 hover:border-[#2B7574]/60 text-[#0E2931] hover:shadow-2xs cursor-pointer'
                       }`}
                     >
-                      {chip.label}
+                      <Clock
+                        className={`w-3.5 h-3.5 mb-1 ${
+                          isSelectedSlot
+                            ? 'text-emerald-200'
+                            : isUnavailable
+                            ? 'text-zinc-400'
+                            : 'text-[#2B7574]'
+                        }`}
+                      />
+                      <span className="font-mono-data font-bold text-xs tracking-tight">
+                        {slot.label}
+                      </span>
+                      <span
+                        className={`text-[9px] font-mono-data mt-0.5 leading-tight font-semibold ${
+                          isSelectedSlot
+                            ? 'text-emerald-200/90'
+                            : isTuesdayRestricted
+                            ? 'text-amber-700'
+                            : bookedDirectly
+                            ? 'text-rose-600'
+                            : isNextHourBlocked
+                            ? 'text-amber-800'
+                            : 'text-zinc-500'
+                        }`}
+                      >
+                        {isTuesdayRestricted
+                          ? 'Martes 16:00+'
+                          : bookedDirectly
+                          ? 'Ocupado'
+                          : isNextHourBlocked
+                          ? 'Ocupado (Margen)'
+                          : slot.desc}
+                      </span>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
+              </div>
+
+              {/* Exact time input */}
+              <div className="flex items-center gap-2 bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 focus-within:border-[#2B7574] focus-within:bg-white transition-colors max-w-xs">
+                <Clock className="w-3.5 h-3.5 text-[#2B7574] shrink-0" />
+                <span className="text-[11px] font-mono-data text-zinc-500">Ajuste fino:</span>
+                <input
+                  type="time"
+                  required
+                  min={isTuesday ? '16:00' : '14:00'}
+                  max="18:00"
+                  value={proposedTime}
+                  onChange={(e) => setProposedTime(e.target.value)}
+                  className="bg-transparent text-[#0E2931] font-mono-data text-xs font-bold w-full focus:outline-none"
+                />
               </div>
             </div>
 

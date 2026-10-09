@@ -43,9 +43,66 @@ export const DEFAULT_DISCOVERY_SLOTS: { time: string; endTime: string }[] = [
   { time: '15:00', endTime: '16:00' },
   { time: '16:00', endTime: '17:00' },
   { time: '17:00', endTime: '18:00' },
+  { time: '18:00', endTime: '19:00' },
 ];
 
 export const STUDIO_TIMEZONE = 'America/Mazatlan';
+
+/**
+ * Checks if a given date string (YYYY-MM-DD) falls on Tuesday
+ * Day of week in JavaScript: 0 = Sunday, 1 = Monday, 2 = Tuesday
+ */
+export const isTuesdayDate = (dateStr: string): boolean => {
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.getDay() === 2;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Checks if a specific slot time is blocked because it is the NEXT HOUR
+ * following a discovery session proposal/booking.
+ * Rule: "si proponen una sesion de descubrimiento la siguiente hora aparezca ocupada"
+ */
+export const isNextHourAfterDiscovery = (
+  bookings: DiscoverySessionBooking[],
+  slotTime: string
+): { isBlocked: boolean; priorBooking?: DiscoverySessionBooking; priorTime?: string } => {
+  try {
+    const [slotH, slotM] = slotTime.split(':').map(Number);
+    const slotMinutes = slotH * 60 + (slotM || 0);
+
+    for (const b of bookings) {
+      if (b.status === 'cancelled') continue;
+      // Applies to discovery sessions
+      const isDiscovery = !b.meetingType || b.meetingType === 'discovery';
+      if (!isDiscovery) continue;
+
+      const [bH, bM] = b.startTime.split(':').map(Number);
+      const bMinutes = bH * 60 + (bM || 0);
+
+      // Next hour condition: exactly 60 minutes after the discovery session begins,
+      // or at the session's endTime
+      if (
+        slotMinutes === bMinutes + 60 ||
+        slotTime === b.endTime ||
+        (slotMinutes > bMinutes && slotMinutes <= bMinutes + 60)
+      ) {
+        return {
+          isBlocked: true,
+          priorBooking: b,
+          priorTime: b.startTime,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Error in isNextHourAfterDiscovery:', err);
+  }
+  return { isBlocked: false };
+};
 
 /**
  * Initialize Google Calendar Auth Listener
@@ -82,34 +139,55 @@ export const signInWithGoogleCalendar = async (): Promise<{
     let resUser: User;
     let token: string;
 
-    const gisAvailable = !!(window as any).google?.accounts?.oauth2;
+    const isCloudOrDev = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+    const gisAvailable = typeof window !== 'undefined' && !!(window as any).google?.accounts?.oauth2;
 
-    try {
-      const result = await signInWithPopup(auth, calendarProvider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (!credential?.accessToken) {
-        throw new Error('No se pudo obtener el token de acceso de Google Calendar.');
-      }
-      resUser = result.user;
-      token = credential.accessToken;
-    } catch (popupErr: any) {
-      const errCode = popupErr?.code || '';
-      const errMsg = popupErr?.message || '';
-
-      if (
-        errCode === 'auth/unauthorized-domain' ||
-        errCode === 'auth/popup-blocked' ||
-        errMsg.includes('unauthorized-domain') ||
-        gisAvailable
-      ) {
-        console.info('[GoogleCalendar] Delegando a Google Identity Services (GIS)...');
+    if (gisAvailable || isCloudOrDev) {
+      try {
+        console.info('[GoogleCalendar] Autenticando directamente con Google OAuth (GIS)...');
         const gisRes = await requestTokenViaGIS(CALENDAR_SCOPES);
         resUser = gisRes.user;
         token = gisRes.accessToken;
-      } else if (errCode === 'auth/popup-closed-by-user') {
-        throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
-      } else {
-        throw popupErr;
+      } catch (gisErr: any) {
+        if (gisErr?.message?.includes('cancelado') || gisErr?.message?.includes('closed')) {
+          throw gisErr;
+        }
+        console.warn('[GoogleCalendar] GIS error, probando Firebase popup:', gisErr);
+        const result = await signInWithPopup(auth, calendarProvider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential?.accessToken) {
+          throw new Error('No se pudo obtener el token de acceso de Google Calendar.');
+        }
+        resUser = result.user;
+        token = credential.accessToken;
+      }
+    } else {
+      try {
+        const result = await signInWithPopup(auth, calendarProvider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (!credential?.accessToken) {
+          throw new Error('No se pudo obtener el token de acceso de Google Calendar.');
+        }
+        resUser = result.user;
+        token = credential.accessToken;
+      } catch (popupErr: any) {
+        const errCode = popupErr?.code || '';
+        const errMsg = popupErr?.message || '';
+
+        if (
+          errCode === 'auth/unauthorized-domain' ||
+          errCode === 'auth/popup-blocked' ||
+          errMsg.includes('unauthorized-domain')
+        ) {
+          console.info('[GoogleCalendar] Delegando a Google Identity Services por restricción de dominio...');
+          const gisRes = await requestTokenViaGIS(CALENDAR_SCOPES);
+          resUser = gisRes.user;
+          token = gisRes.accessToken;
+        } else if (errCode === 'auth/popup-closed-by-user') {
+          throw new Error('Ventana de acceso cerrada antes de completar la autorización.');
+        } else {
+          throw popupErr;
+        }
       }
     }
 
@@ -259,13 +337,34 @@ export const getDayAvailability = async (
       };
     }
 
-    // Check conflict with local bookings
+    // Regla de los martes: las sesiones empiezan desde las 4 de la tarde (16:00)
+    if (dayOfWeek === 2 && slot.time < '16:00') {
+      return {
+        ...slot,
+        available: false,
+        reason: 'Los martes las sesiones inician a partir de las 4:00 PM (16:00 hrs)',
+        isTuesdayRestricted: true,
+      };
+    }
+
+    // Check conflict with local bookings (horario directamente reservado)
     const localConflict = localBookings.find((b) => b.startTime === slot.time);
     if (localConflict) {
       return {
         ...slot,
         available: false,
-        reason: 'Horario reservado por otro cliente',
+        reason: `Horario reservado (${localConflict.clientName})`,
+      };
+    }
+
+    // Regla: si proponen una sesión de descubrimiento, la siguiente hora aparece ocupada
+    const nextHourCheck = isNextHourAfterDiscovery(localBookings, slot.time);
+    if (nextHourCheck.isBlocked) {
+      return {
+        ...slot,
+        available: false,
+        reason: `Ocupado (Margen técnico tras sesión de descubrimiento de las ${nextHourCheck.priorTime || 'hora anterior'})`,
+        isNextHourBuffer: true,
       };
     }
 

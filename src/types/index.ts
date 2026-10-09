@@ -267,6 +267,8 @@ export interface CalendarTimeSlot {
   endTime: string;
   available: boolean;
   reason?: string;
+  isNextHourBuffer?: boolean;
+  isTuesdayRestricted?: boolean;
 }
 
 export interface StudioAnnouncement {

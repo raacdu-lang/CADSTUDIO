@@ -246,8 +246,8 @@ export default function App() {
       {/* 24/7 AI Chatbot Concierge & Budget Estimator */}
       <Chatbot config={studioConfig} />
 
-      {/* Floating Real-Time Notifications for Studio Events */}
-      <NotificationToast />
+      {/* Floating Real-Time Notifications for Studio Events - VISIBLE ONLY IN ADMIN DASHBOARD */}
+      {activeView === 'admin' && <NotificationToast />}
 
       {/* Editorial Footer */}
       <Footer config={studioConfig} onNavigate={setActiveView} />
